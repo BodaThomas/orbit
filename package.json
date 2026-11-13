@@ -1,0 +1,98 @@
+{
+  "name": "orbit",
+  "productName": "Orbit",
+  "version": "0.1.0",
+  "description": "Orbit — your personal AI universe.",
+  "private": true,
+  "type": "module",
+  "main": "./out/main/index.js",
+  "author": "Orbit",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "lint": "eslint .",
+    "test": "ELECTRON_RUN_AS_NODE=1 electron node_modules/vitest/vitest.mjs run",
+    "db:generate": "drizzle-kit generate",
+    "rebuild:native": "electron-builder install-app-deps",
+    "rebuild:node": "npm rebuild better-sqlite3",
+    "package": "npm run build && electron-builder --mac --dir",
+    "dist": "npm run build && electron-builder --mac",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.8.0",
+    "better-sqlite3": "13.1.1",
+    "drizzle-orm": "0.45.4",
+    "nanoid": "6.0.2",
+    "openai": "7.56.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@fontsource-variable/geist": "5.3.0",
+    "@fontsource-variable/geist-mono": "5.3.0",
+    "@tailwindcss/vite": "4.3.5",
+    "@tanstack/react-query": "5.107.1",
+    "@types/better-sqlite3": "9.6.0",
+    "@types/node": "26.6.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "cmdk": "1.1.1",
+    "drizzle-kit": "0.31.11",
+    "electron": "45.3.2",
+    "electron-builder": "26.18.0",
+    "electron-vite": "6.0.0",
+    "eslint": "10.14.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.14.0",
+    "lucide-react": "1.72.0",
+    "motion": "14.14.0",
+    "radix-ui": "1.8.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
+    "shiki": "4.6.0",
+    "sonner": "2.0.8",
+    "tailwind-merge": "3.7.0",
+    "tailwindcss": "4.3.5",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.2",
+    "vite": "8.3.8",
+    "vitest": "5.1.0",
+    "zustand": "5.1.0"
+  },
+  "build": {
+    "appId": "dev.orbit.desktop",
+    "productName": "Orbit",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg"
+      ],
+      "icon": "build/icon.png",
+      "darkModeSupport": true,
+      "hardenedRuntime": true,
+      "identity": null
+    },
+    "npmRebuild": true
+  }
+}
