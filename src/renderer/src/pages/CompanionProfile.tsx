@@ -14,6 +14,7 @@ import { cn } from '@/lib/cn'
 import { compactNumber, duration, integer, money, relative } from '@/lib/format'
 import { useAction, useActivity, useAgent, useAutomations, useConstellations, useConversations, useMachines, useMemory, useMissions, useProviders, useRecentFiles, useSecurity, useUsage } from '@/lib/queries'
 import { ActivityEventRow } from '@/orbit/ActivityEvent'
+import { AutoActionLog, AutoAllowedList, AutonomyModes, GrantList } from '@/orbit/PermissionPanels'
 import { CompanionAvatar, CompanionStatusIndicator } from '@/orbit/CompanionAvatar'
 import { CompanionContextItems } from '@/orbit/CompanionListItem'
 import { OrbitEmptyState } from '@/orbit/EmptyState'
@@ -198,7 +199,7 @@ function Tools({ agent }: { agent: Agent }) {
             <div key={r.key} className="grid grid-cols-[180px_1fr_auto] items-start gap-3 px-4 py-2.5">
               <span className="text-[13px] text-fg">
                 {r.label}
-                <span className="block text-2xs text-fg-4">{r.key === 'outside' || r.key === 'secrets' ? 'Garde-fou permanent' : `Réglage : ${r.companion ? 'activé' : 'désactivé'}`}</span>
+                <span className="block text-2xs text-fg-4">{r.key === 'outside' || r.key === 'secrets' || r.key === 'sensitive' ? 'Garde-fou permanent' : `Réglage : ${r.companion ? 'activé' : 'désactivé'}`}</span>
               </span>
               <span className="text-[12px] leading-snug text-fg-3">
                 {r.detail}
@@ -209,10 +210,34 @@ function Tools({ agent }: { agent: Agent }) {
           ))}
         </div>
         <p className="mt-2 text-2xs leading-relaxed text-fg-4">
-          Les approbations ponctuelles ne valent que pour une action. Aucune autorisation de session n’est mémorisée par Orbit : chaque nouvelle action sensible repasse par la politique.{' '}
+          Ces règles sont appliquées par Orbit dans le moteur (hook avant chaque outil), pas par le prompt. Le dossier autorisé n’est un vrai bac à sable que si l’isolation renforcée est active.{' '}
           <button className="text-accent hover:underline" onClick={() => navigate('/settings/security')}>Sécurité et niveaux d’isolation</button>
         </p>
       </div>
+      <Section title="Mode d’autonomie" hint={<button className="text-accent hover:underline" onClick={() => navigate(`/companions/${agent.id}/edit`)}>Modifier</button>}>
+        <AutonomyModes current={agent.autonomy} />
+      </Section>
+      <Section title="Autorisé sans confirmation" hint="Selon le mode et les permissions">
+        <AutoAllowedList agent={agent} />
+      </Section>
+      <Section title="Autorisations mémorisées" hint="Opération exacte · ce compagnon · ce dossier">
+        <GrantList agentId={agent.id} />
+      </Section>
+      <Section title="Historique sans confirmation" hint="Actions exécutées sans vous déranger">
+        <AutoActionLog agentId={agent.id} />
+      </Section>
+    </div>
+  )
+}
+
+function Section({ title, hint, children }: { title: string; hint?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="mb-1.5 flex items-baseline justify-between">
+        <div className="text-xs font-medium text-fg-2">{title}</div>
+        {hint && <span className="text-2xs text-fg-4">{hint}</span>}
+      </div>
+      {children}
     </div>
   )
 }

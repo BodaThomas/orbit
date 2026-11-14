@@ -1,10 +1,12 @@
 import { useState } from 'react'
-import { Check, ChevronRight, ShieldAlert, X } from 'lucide-react'
+import { Check, ChevronRight, Infinity as InfinityIcon, Rocket, ShieldAlert, X } from 'lucide-react'
+import { CATEGORY_LABELS, SENSITIVE_CATEGORIES } from '@shared/permission-labels'
 import type { Agent, ApprovalRequest as A } from '@shared/types'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/cn'
 import { relative } from '@/lib/format'
 import { useAction } from '@/lib/queries'
+import { Tooltip } from '@/components/ui/overlay'
 import { navigate } from '@/stores/router'
 import { CompanionAvatar } from './CompanionAvatar'
 
@@ -43,13 +45,21 @@ export function ApprovalRequestCard({ approval, agent, expanded = false }: { app
   const resolve = useAction('approvals.resolve', { success: (a) => (a.status === 'approved' ? 'Demande approuvée' : 'Demande refusée') })
   const [open, setOpen] = useState(expanded)
   const p = approval.payload
+  const grant = p?.grant
+  const canMission = Boolean(grant && approval.missionId && (grant.max === 'mission' || grant.max === 'always'))
+  const canAlways = grant?.max === 'always'
+  const sensitive = Boolean(p?.category && SENSITIVE_CATEGORIES.includes(p.category))
   const hasDetail = Boolean(p && (p.command || p.paths?.length || p.diff))
   return (
     <div className="rounded-[11px] bg-warning/[0.05] p-3 ring-1 ring-warning/15">
       <div className="flex items-start gap-2.5">
         {agent ? <CompanionAvatar appearance={agent.appearance} size={28} seed={agent.id} status="awaiting_approval" animated /> : <ShieldAlert className="size-5 text-warning" />}
         <div className="min-w-0 flex-1">
-          {p && <div className="mb-0.5 text-2xs font-medium tracking-wide text-warning uppercase">{KIND_LABEL[p.kind] ?? p.tool}</div>}
+          {p && (
+            <div className={cn('mb-0.5 text-2xs font-medium tracking-wide uppercase', sensitive ? 'text-danger' : 'text-warning')}>
+              {p.category ? (CATEGORY_LABELS[p.category] ?? KIND_LABEL[p.kind] ?? p.tool) : (KIND_LABEL[p.kind] ?? p.tool)}
+            </div>
+          )}
           <button className="text-left text-[13px] leading-snug text-fg hover:underline" onClick={() => approval.missionId && navigate(`/missions/${approval.missionId}`)}>
             {approval.summary}
           </button>
@@ -84,10 +94,24 @@ export function ApprovalRequestCard({ approval, agent, expanded = false }: { app
             </div>
           )}
 
-          <div className="mt-2.5 flex items-center gap-1.5">
-            <Button size="xs" variant="success" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: approval.id, approve: true })}>
-              <Check /> Approuver
+          <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+            <Button size="xs" variant="success" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: approval.id, approve: true, scope: 'once' })}>
+              <Check /> {approval.kind === 'tool_use' ? 'Autoriser une fois' : 'Approuver'}
             </Button>
+            {canMission && (
+              <Tooltip content={`${grant!.label} — jusqu’à la fin de cette mission`}>
+                <Button size="xs" variant="secondary" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: approval.id, approve: true, scope: 'mission' })}>
+                  <Rocket /> Pour cette mission
+                </Button>
+              </Tooltip>
+            )}
+            {canAlways && (
+              <Tooltip content={`${grant!.label} — toujours, pour ce compagnon et ce dossier. Révocable dans Permissions.`}>
+                <Button size="xs" variant="secondary" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: approval.id, approve: true, scope: 'always' })}>
+                  <InfinityIcon /> Toujours
+                </Button>
+              </Tooltip>
+            )}
             <Button size="xs" variant="ghost" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: approval.id, approve: false })}>
               <X /> Refuser
             </Button>

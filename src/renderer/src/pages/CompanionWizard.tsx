@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, ArrowRight, Check, FolderOpen, Laptop, Lock, Server, ShieldCheck, Sparkles, Wand2, Zap } from 'lucide-react'
 import { COMPANION_PRESETS, DEFAULT_PERMISSIONS, EXPRESSIONS, PALETTE_IDS, PALETTES, PERMISSION_LABELS, SPECIES, TEXTURES } from '@shared/catalog'
+import { AUTONOMY_EXPLAINED } from '@shared/permission-labels'
 import { EFFORT_LEVELS, isAgentEngine } from '@shared/engines'
 import type { AgentInput } from '@shared/ipc'
 import type { AgentPermissions, Appearance, AutonomyLevel, PaletteId, ProviderInfo } from '@shared/types'
@@ -25,9 +26,9 @@ const STEPS = [
 ] as const
 
 const AUTONOMY: { id: AutonomyLevel; label: string; body: string; icon: typeof Lock }[] = [
-  { id: 'manual', label: 'Manuel', body: 'Travaille uniquement quand vous le demandez.', icon: Lock },
-  { id: 'supervised', label: 'Supervisé', body: 'Demande votre accord avant toute action sensible.', icon: ShieldCheck },
-  { id: 'automated', label: 'Automatisé', body: 'Exécute des missions prévues dans un périmètre limité.', icon: Zap },
+  { id: 'manual', label: AUTONOMY_EXPLAINED.manual.label, body: AUTONOMY_EXPLAINED.manual.short, icon: Lock },
+  { id: 'supervised', label: AUTONOMY_EXPLAINED.supervised.label, body: AUTONOMY_EXPLAINED.supervised.short, icon: ShieldCheck },
+  { id: 'automated', label: AUTONOMY_EXPLAINED.automated.label, body: AUTONOMY_EXPLAINED.automated.short, icon: Zap },
 ]
 
 function initialDraft(): AgentInput {
@@ -459,7 +460,7 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
                 </div>
                 <p className="mt-2 text-xs leading-relaxed text-fg-3">
                   {provider?.capabilities.kind === 'agent'
-                    ? `Chaque action de ${provider.name} est vérifiée par Orbit avant de s’exécuter, uniquement dans le dossier autorisé. Une permission désactivée bloque l’action ; ${draft.autonomy === 'automated' ? 'en mode automatique, seules les commandes risquées et les actions externes vous sont soumises' : 'en mode supervisé ou manuel, chaque modification, commande ou accès réseau attend votre accord'}.`
+                    ? `Chaque action de ${provider.name} est vérifiée par Orbit avant de s’exécuter, uniquement dans le dossier autorisé. Une permission désactivée bloque l’action ; ${draft.autonomy === 'automated' ? 'en mode automatique, seules les actions sensibles vous sont soumises' : draft.autonomy === 'supervised' ? 'en mode supervisé, lectures, modifications, tests et compilation se font sans vous déranger ; installations, déploiements, Git distant ou destructif, secrets et suppressions massives attendent votre accord' : 'en mode manuel, chaque modification, commande ou accès réseau attend votre accord'}.`
                     : `Ce fournisseur répond sans outils : ces permissions s’appliqueront s’il passe sur un moteur agent${sensitive.length > 0 && draft.autonomy === 'supervised' ? '. En mode supervisé, chaque mission demandera votre approbation' : ''}.`}
                 </p>
               </div>

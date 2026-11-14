@@ -9,6 +9,7 @@ import { dateTime, relative } from '@/lib/format'
 import { useQueryClient } from '@tanstack/react-query'
 import { call } from '@/lib/api'
 import { useAction, useAudit, useBootstrap, useNotifications, useProviders, useSecurity } from '@/lib/queries'
+import { AutoActionLog, GrantList } from '@/orbit/PermissionPanels'
 import { useConfirm } from '@/orbit/Confirm'
 import { ProviderMark } from '@/orbit/ProviderMark'
 import { ClaudeCodeConnection } from '@/orbit/ClaudeCodeConnection'
@@ -141,7 +142,7 @@ function SecurityLevels() {
     <>
       <div className="px-1 text-xs font-medium text-fg-3">Niveaux de sécurité des compagnons</div>
       <Card>
-        <Row title="Niveau 1 · Politique d’Orbit" body="Chaque action d’un moteur (lecture, écriture, commande, réseau) est évaluée par Orbit avant de s’exécuter : dossier autorisé, liens symboliques résolus, fichiers sensibles (.env, clés), commandes destructrices. Une commande shell reste toutefois opaque : ce niveau ne garantit pas l’isolation.">
+        <Row title="Niveau 1 · Politique d’Orbit" body="Chaque action d’un moteur est évaluée par Orbit avant de s’exécuter (hook PreToolUse pour Claude, demandes d’approbation pour Codex) : dossier autorisé, chemins relatifs et liens symboliques résolus, fichiers sensibles, commandes analysées selon leurs arguments et leurs effets (sous-shells compris). Les actions courantes passent sans vous déranger en mode supervisé ; les actions sensibles vous sont soumises. Une commande shell reste en partie opaque : ce niveau ne garantit pas l’isolation.">
           <Badge tone="success">Toujours actif</Badge>
         </Row>
         <Row title="Niveau 2 · Bac à sable du moteur" body="Codex : Seatbelt en lecture seule (supervisé) ou écriture limitée au dossier, réseau coupé sans permission. Claude : outils retirés, lecture confinée aux dossiers de travail, commandes dans le bac à sable de Claude Code. Ces bacs à sable limitent l’écriture et le réseau, pas toutes les lectures.">
@@ -174,6 +175,10 @@ function SecurityLevels() {
           <Button size="sm" variant="ghost" onClick={() => navigate('/machines')}>Machines</Button>
         </Row>
       </Card>
+      <div className="px-1 pt-2 text-xs font-medium text-fg-3">Autorisations mémorisées (tous les compagnons)</div>
+      <GrantList />
+      <div className="px-1 pt-2 text-xs font-medium text-fg-3">Actions exécutées sans confirmation</div>
+      <AutoActionLog limit={60} />
       <div className="px-1 pt-2 text-xs font-medium text-fg-3">Décisions de sécurité récentes</div>
       <Card>
         {security.data?.events.slice(0, 40).map((e) => (
@@ -309,7 +314,7 @@ export function SettingsPage({ section }: { section?: string }) {
               <Card>
                 <Row title="Isolation du rendu" body="Context isolation, sandbox, aucune intégration Node, CSP stricte, IPC sur liste blanche et validé."><Badge tone="success">Active</Badge></Row>
                 <Row title="Secrets" body={boot.data?.secureStorage ? 'Chiffrés via safeStorage (clé dans le Trousseau macOS).' : 'Indisponible'}><Badge tone={boot.data?.secureStorage ? 'success' : 'danger'}>{boot.data?.secureStorage ? 'Trousseau' : 'Indisponible'}</Badge></Row>
-                <Row title="Règles d’autonomie" body="Appliquées dans le processus principal. Aucun texte produit par un modèle ne peut les modifier."><Badge tone="success">Code, pas prompt</Badge></Row>
+                <Row title="Règles d’autonomie" body="Appliquées dans le processus principal et dans chaque moteur. Aucun texte produit par un modèle ne peut les modifier, et aucun outil d’un compagnon ne peut lire ou écrire les données d’Orbit (autorisations, journal)."><Badge tone="success">Code, pas prompt</Badge></Row>
               </Card>
               <div className="px-1 pt-2 text-xs font-medium text-fg-3">Journal d’audit</div>
               <Card>
