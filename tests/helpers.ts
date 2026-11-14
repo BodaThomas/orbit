@@ -1,7 +1,9 @@
 import { COMPANION_PRESETS, DEFAULT_PERMISSIONS } from '@shared/catalog'
 import type { OrbitEvent } from '@shared/ipc'
 import type { ProviderId } from '@shared/types'
+import { AgentRunner } from '../src/main/core/agent-runner'
 import { AgentManager } from '../src/main/core/agents'
+import type { AgentEngine, EngineId } from '../src/main/core/engine/types'
 import { ConversationManager } from '../src/main/core/conversations'
 import { EventBus } from '../src/main/core/event-bus'
 import { Journal } from '../src/main/core/journal'
@@ -38,7 +40,7 @@ export function fakeAdapter(opts: { words?: string[]; delayMs?: number; fail?: s
   }
 }
 
-export function makeCore(adapter: ProviderAdapter = fakeAdapter()) {
+export function makeCore(adapter: ProviderAdapter = fakeAdapter(), engines: Partial<Record<EngineId, AgentEngine>> = {}) {
   const handle = openDatabase(':memory:')
   const db = handle.db
   const bus = new EventBus()
@@ -49,18 +51,20 @@ export function makeCore(adapter: ProviderAdapter = fakeAdapter()) {
     secrets: { available: () => true, encrypt: (s) => `enc:${Buffer.from(s).toString('base64')}`, decrypt: (c) => Buffer.from(c.slice(4), 'base64').toString() },
     nativeNotify: (title) => notified.push(title),
     fetch,
+    appVersion: '0.0.0-test',
   }
   const settings = new SettingsStore(db, 'real')
   const journal = new Journal(db, bus, platform, () => true)
   const agents = new AgentManager(db, bus, journal)
   const adapters = { ...ADAPTERS, anthropic: adapter } as Record<ProviderId, ProviderAdapter>
-  const providers = new ProviderRegistry(db, bus, journal, platform.secrets, settings, 'real', adapters)
+  const providers = new ProviderRegistry(db, bus, journal, platform.secrets, settings, 'real', adapters, engines)
   const usage = new UsageTracker(db, bus, settings)
   const permissions = new PermissionManager(journal)
   const memory = new MemoryStore(db, bus)
   const conversations = new ConversationManager(db, bus, journal, agents, providers, usage, permissions, memory)
-  const missions = new MissionManager(db, bus, journal, agents, providers, usage, permissions, memory)
-  return { handle, db, bus, events, notified, settings, journal, agents, providers, usage, permissions, memory, conversations, missions }
+  const runner = new AgentRunner(db, bus, journal, agents, usage)
+  const missions = new MissionManager(db, bus, journal, agents, providers, usage, permissions, memory, runner)
+  return { handle, db, bus, events, notified, settings, journal, agents, providers, usage, permissions, memory, conversations, missions, runner }
 }
 
 export function novaInput(overrides: Partial<Parameters<AgentManager['create']>[0]> = {}) {
