@@ -12,4 +12,6 @@ export interface PlatformServices {
   nativeNotify(title: string, body: string, route: string | null): void
   fetch: typeof fetch
   appVersion: string
+  /** Path of the bundled `orbit-runtime.mjs` (remote deployment), when available. */
+  runtimeBundle?: () => string | null
 }

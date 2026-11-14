@@ -1,8 +1,9 @@
-import { and, gte, sql } from 'drizzle-orm'
+import { and, desc, gte, sql } from 'drizzle-orm'
 import { estimateCost } from '@shared/pricing'
-import type { CostBreakdown, CostKind, ProviderId, UsageRecord, UsageSummary } from '@shared/types'
+import type { CostBreakdown, CostKind, MissionStatus, ProviderId, RateLimitSnapshot, UsageRecord, UsageSummary } from '@shared/types'
 import type { OrbitDb } from '../infra/db/client'
-import { missions, usageRecords } from '../infra/db/schema'
+import { missionCounts } from '@shared/stats'
+import { missions, subscriptionUsageRecords, usageRecords } from '../infra/db/schema'
 import type { EventBus } from './event-bus'
 import type { SettingsStore } from './settings'
 import { newId, nowIso, startOfLocalDay } from './util'
@@ -37,12 +38,14 @@ export class UsageTracker {
     source: UsageRecord['source']
     /** Cost already computed elsewhere (engine estimate, subscription). Otherwise priced from the dated table. */
     cost?: { costUsd: number | null; costKind: CostKind; pricingVersion: string | null }
+    /** Subscription only: theoretical API-price equivalent, stored apart, never summed into spend. */
+    equivalentUsd?: number | null
   }): { costUsd: number | null; costKind: CostKind } {
-    const { cost, ...row } = input
+    const { cost, equivalentUsd, ...row } = input
     const est = cost ?? estimateCost(input.providerId, input.model, input.inputTokens, input.outputTokens)
     this.db
       .insert(usageRecords)
-      .values({ id: newId(), ...row, costUsd: est.costUsd, costKind: est.costKind, pricingVersion: est.pricingVersion, createdAt: nowIso() })
+      .values({ id: newId(), ...row, costUsd: est.costKind === 'subscription' ? null : est.costUsd, costKind: est.costKind, pricingVersion: est.pricingVersion, equivalentUsd: est.costKind === 'subscription' ? (equivalentUsd ?? null) : null, createdAt: nowIso() })
       .run()
     this.bus.invalidate('usage')
     return { costUsd: est.costUsd, costKind: est.costKind }
@@ -66,6 +69,17 @@ export class UsageTracker {
       if (c.costKind !== 'estimated') costKind = c.costKind
     }
     return { costUsd, costKind, model: chunk.model ?? requestedModel }
+  }
+
+  /** Latest official quota snapshot per provider. Older than 6 h → dropped (no stale quota shown as current). */
+  quotas(maxAgeMs = 6 * 3600_000): RateLimitSnapshot[] {
+    const rows = this.db.select().from(subscriptionUsageRecords).orderBy(desc(subscriptionUsageRecords.observedAt)).limit(200).all()
+    const seen = new Map<string, RateLimitSnapshot>()
+    for (const r of rows) {
+      if (seen.has(r.providerId) || Date.now() - new Date(r.observedAt).getTime() > maxAgeMs) continue
+      seen.set(r.providerId, { providerId: r.providerId as ProviderId, windows: r.windows, observedAt: r.observedAt, source: r.source })
+    }
+    return [...seen.values()]
   }
 
   /** Known spend (official + estimated) since local midnight, optionally per agent. */
@@ -138,12 +152,15 @@ export class UsageTracker {
       tokensMonth: { input: 0, output: 0 },
       missionsDone: 0,
       missionsFailed: 0,
+      missionsCancelled: 0,
+      missionCounts: missionCounts([]),
+      subscriptionMonth: { requests: 0, tokens: 0, equivalentUsd: null },
       avgMissionSeconds: null,
       dailyLimitUsd: this.settings.get().dailyLimitUsd,
       monthlyBudgetUsd: this.settings.get().monthlyBudgetUsd,
     }
     const byProvider = new Map<ProviderId, CostBreakdown>()
-    const byAgent = new Map<string, { cost: CostBreakdown; requests: number }>()
+    const byAgent = new Map<string, { cost: CostBreakdown; requests: number; tokens: number }>()
     const daily = new Map<string, { official: number; estimated: number; requests: number }>()
     for (let i = 29; i >= 0; i--) daily.set(localDateKey(startOfLocalDay(now, -i).toISOString()), { official: 0, estimated: 0, requests: 0 })
 
@@ -162,10 +179,16 @@ export class UsageTracker {
         s.requestsMonth++
         s.tokensMonth.input += r.inputTokens
         s.tokensMonth.output += r.outputTokens
+        if (kind === 'subscription') {
+          s.subscriptionMonth.requests++
+          s.subscriptionMonth.tokens += r.inputTokens + r.outputTokens
+          if (r.equivalentUsd != null) s.subscriptionMonth.equivalentUsd = (s.subscriptionMonth.equivalentUsd ?? 0) + r.equivalentUsd
+        }
         if (r.agentId) {
-          const a = byAgent.get(r.agentId) ?? { cost: empty(), requests: 0 }
+          const a = byAgent.get(r.agentId) ?? { cost: empty(), requests: 0, tokens: 0 }
           add(a.cost, kind, r.costUsd)
           a.requests++
+          a.tokens += r.inputTokens + r.outputTokens
           byAgent.set(r.agentId, a)
         }
       }
@@ -179,21 +202,18 @@ export class UsageTracker {
     s.byProviderToday = [...byProvider].map(([providerId, cost]) => ({ providerId, cost }))
     s.byAgentMonth = [...byAgent]
       .map(([agentId, v]) => ({ agentId, ...v }))
-      .sort((a, b) => b.cost.official + b.cost.estimated - (a.cost.official + a.cost.estimated))
+      .sort((a, b) => b.requests - a.requests || b.cost.official + b.cost.estimated - (a.cost.official + a.cost.estimated) || a.agentId.localeCompare(b.agentId))
     s.daily = [...daily].map(([date, v]) => ({ date, ...v }))
 
-    const m = this.db
-      .select({
-        done: sql<number>`sum(case when ${missions.status} = 'done' then 1 else 0 end)`,
-        failed: sql<number>`sum(case when ${missions.status} = 'failed' then 1 else 0 end)`,
-        avg: sql<number | null>`avg(case when ${missions.finishedAt} is not null and ${missions.startedAt} is not null then (julianday(${missions.finishedAt}) - julianday(${missions.startedAt})) * 86400 end)`,
-      })
-      .from(missions)
-      .where(gte(missions.createdAt, monthStart.toISOString()))
-      .get()
-    s.missionsDone = m?.done ?? 0
-    s.missionsFailed = m?.failed ?? 0
-    s.avgMissionSeconds = m?.avg ?? null
+    // Missions created this month. Same function as every other screen (shared/stats.ts).
+    const monthMissions = this.db.select({ status: missions.status, startedAt: missions.startedAt, finishedAt: missions.finishedAt }).from(missions).where(gte(missions.createdAt, monthStart.toISOString())).all()
+    const mc = missionCounts(monthMissions.map((m) => ({ status: m.status as MissionStatus })))
+    s.missionCounts = mc
+    s.missionsDone = mc.done
+    s.missionsFailed = mc.failed
+    s.missionsCancelled = mc.cancelled
+    const durations = monthMissions.filter((m) => m.status === 'done' && m.startedAt && m.finishedAt).map((m) => (new Date(m.finishedAt!).getTime() - new Date(m.startedAt!).getTime()) / 1000)
+    s.avgMissionSeconds = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : null
     return s
   }
 }

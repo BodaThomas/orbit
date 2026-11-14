@@ -20,13 +20,25 @@ import type {
   ProviderInfo,
   UsageSummary,
   Workflow,
+  SecurityStatus,
+  RateLimitSnapshot,
+  ClaudeLocalUsage,
+  ConstellationSignal,
+  ConstellationDefinition,
+  ConstellationRun,
+  ConstellationRunDetail,
+  AgentWorkspace,
+  Automation,
+  RemoteMachine,
+  AutomationRun,
+  RecentFileChange,
 } from './types'
 
 // Input schemas
 
 const id = z.string().min(1).max(64)
 const paletteId = z.enum(['lavender', 'azure', 'teal', 'amber', 'rose', 'mint', 'coral', 'slate'])
-const providerId = z.enum(['anthropic', 'openai', 'claude-agent', 'codex', 'gemini', 'grok', 'openrouter', 'ollama', 'demo'])
+const providerId = z.enum(['anthropic', 'openai', 'claude-code', 'claude-agent', 'codex', 'gemini', 'grok', 'openrouter', 'ollama', 'demo'])
 
 export const appearanceSchema = z.object({
   species: z.enum(['round', 'oval', 'antenna', 'eared', 'cloud', 'drop']),
@@ -63,8 +75,13 @@ export const agentInputSchema = z.object({
   permissions: permissionsSchema,
   workingDirectory: z.string().max(1024).nullable(),
   dailyBudgetUsd: z.number().min(0).max(10_000).nullable(),
+  isolation: z.enum(['standard', 'strict']).default('standard'),
+  effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).nullable().default(null),
+  runtime: z.enum(['local', 'remote']).default('local'),
+  machineId: z.string().max(64).nullable().default(null),
 })
 export type AgentInput = z.infer<typeof agentInputSchema>
+export type AgentInputRaw = z.input<typeof agentInputSchema>
 
 const settingsPatch = z
   .object({
@@ -76,6 +93,54 @@ const settingsPatch = z
     reduceMotion: z.enum(['system', 'always', 'never']),
   })
   .partial()
+
+const limitsSchema = z.object({
+  maxDepth: z.number().int().min(1).max(5),
+  maxSubtasks: z.number().int().min(1).max(50),
+  maxParallel: z.number().int().min(1).max(8),
+  maxDurationMin: z.number().int().min(1).max(1440),
+  maxTokens: z.number().int().min(1000).max(100_000_000).nullable(),
+  maxBudgetUsd: z.number().min(0).max(10_000).nullable(),
+})
+
+export const constellationInputSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  description: z.string().max(2000),
+  objective: z.string().max(4000),
+  coordinatorAgentId: id,
+  members: z
+    .array(z.object({ agentId: id, role: z.string().max(80), responsibilities: z.string().max(1000), canDelegate: z.boolean() }))
+    .min(2)
+    .max(12),
+  workspace: z.string().max(1024).nullable(),
+  workspaceMode: z.enum(['shared', 'worktrees']),
+  permissions: permissionsSchema,
+  limits: limitsSchema,
+  isTemplate: z.boolean(),
+})
+
+export const recurrenceSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('once'), at: z.string().max(20) }),
+  z.object({ kind: z.literal('daily'), time: z.string().max(5) }),
+  z.object({ kind: z.literal('weekly'), days: z.array(z.number().int().min(1).max(7)).min(1).max(7), time: z.string().max(5) }),
+  z.object({ kind: z.literal('monthly'), day: z.number().int().min(1).max(31), time: z.string().max(5) }),
+  z.object({ kind: z.literal('interval'), minutes: z.number().int().min(5).max(44_640), anchor: z.string().max(40) }),
+  z.object({ kind: z.literal('cron'), expr: z.string().max(120) }),
+])
+
+export const automationInputSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  description: z.string().max(2000),
+  targetKind: z.enum(['agent', 'constellation']),
+  targetId: id,
+  title: z.string().trim().min(1).max(160),
+  prompt: z.string().max(20_000),
+  recurrence: recurrenceSchema.nullable(),
+  timezone: z.string().min(1).max(64),
+  missedPolicy: z.enum(['skip', 'run_once', 'ask']),
+  maxRunsPerDay: z.number().int().min(1).max(500).nullable(),
+  triggers: z.array(z.object({ kind: z.enum(['mission.completed', 'mission.failed', 'automation.completed']), sourceAgentId: id.nullable(), sourceAutomationId: id.nullable(), cooldownSec: z.number().int().min(60).max(86_400) })).max(5),
+})
 
 const memoryKind = z.enum(['instruction', 'personal', 'fact', 'summary', 'document', 'mission'])
 
@@ -97,6 +162,7 @@ export const ipcSchemas = {
   'providers.setKey': z.object({ providerId, apiKey: z.string().trim().min(8).max(512) }),
   'providers.removeKey': z.object({ providerId }),
   'providers.validate': z.object({ providerId }),
+  'providers.testEngine': z.object({ providerId }),
   'providers.health': z.void(),
   'providers.refreshHealth': z.void(),
 
@@ -135,6 +201,9 @@ export const ipcSchemas = {
     level: z.enum(['info', 'success', 'warning', 'error']).optional(),
   }),
   'usage.summary': z.void(),
+  'usage.quotas': z.void(),
+  'usage.localClaude': z.void(),
+  'usage.setLocalClaude': z.object({ enabled: z.boolean() }),
   'notifications.list': z.void(),
   'notifications.markRead': z.object({ id: id.optional() }),
 
@@ -146,6 +215,45 @@ export const ipcSchemas = {
   'machines.list': z.void(),
   'workflows.list': z.void(),
   'audit.list': z.object({ limit: z.number().int().min(1).max(500).optional() }),
+
+  'constellations.list': z.void(),
+  'constellations.create': constellationInputSchema,
+  'constellations.update': z.object({ id, input: constellationInputSchema }),
+  'constellations.delete': z.object({ id }),
+  'constellations.duplicate': z.object({ id, asTemplate: z.boolean().optional() }),
+  'constellations.launch': z.object({ id, goal: z.string().trim().min(1).max(20_000) }),
+  'constellations.runs': z.object({ constellationId: id.optional() }),
+  'constellations.run': z.object({ id }),
+  'constellations.cancel': z.object({ id }),
+  'constellations.resume': z.object({ id }),
+  'constellations.workspaceDiff': z.object({ id }),
+  'constellations.mergeWorkspace': z.object({ id }),
+  'constellations.discardWorkspace': z.object({ id }),
+
+  'automations.list': z.void(),
+  'automations.runs': z.object({ automationId: id.optional() }),
+  'automations.create': automationInputSchema,
+  'automations.update': z.object({ id, input: automationInputSchema }),
+  'automations.delete': z.object({ id }),
+  'automations.setStatus': z.object({ id, status: z.enum(['active', 'paused']) }),
+  'automations.runNow': z.object({ id }),
+  'automations.confirmRun': z.object({ id, approve: z.boolean() }),
+  'automations.preview': z.object({ recurrence: recurrenceSchema, timezone: z.string().max(64), count: z.number().int().min(1).max(10).optional() }),
+  'app.launchAtLogin': z.object({ enabled: z.boolean().optional() }),
+
+  'runtime.list': z.void(),
+  'runtime.register': z.object({ name: z.string().trim().min(1).max(60), transport: z.enum(['ssh', 'local']), host: z.string().max(253).nullable(), user: z.string().max(32).nullable(), port: z.number().int().min(1).max(65535), runtimeHome: z.string().min(1).max(512) }),
+  'runtime.scanHostKey': z.object({ id }),
+  'runtime.confirmHostKey': z.object({ id, fingerprint: z.string().max(200) }),
+  'runtime.deployPlan': z.object({ id }),
+  'runtime.deploy': z.object({ id }),
+  'runtime.connect': z.object({ id }),
+  'runtime.disconnect': z.object({ id }),
+  'runtime.revoke': z.object({ id }),
+
+  'security.status': z.void(),
+  'security.selfTest': z.void(),
+  'files.recent': z.object({ agentId: id.optional(), limit: z.number().int().min(1).max(500).optional() }),
 } as const
 
 export type IpcChannel = keyof typeof ipcSchemas
@@ -171,6 +279,7 @@ export interface IpcOutputs {
   'providers.setKey': ProviderInfo
   'providers.removeKey': ProviderInfo
   'providers.validate': { ok: boolean; error: string | null }
+  'providers.testEngine': { ok: boolean; text: string; model: string | null; durationMs: number; error: string | null; deniedTools: number }
   'providers.health': ProviderHealth[]
   'providers.refreshHealth': ProviderHealth[]
 
@@ -198,6 +307,9 @@ export interface IpcOutputs {
 
   'activity.list': ActivityEvent[]
   'usage.summary': UsageSummary
+  'usage.quotas': RateLimitSnapshot[]
+  'usage.localClaude': { enabled: boolean; usage: ClaudeLocalUsage | null; error: string | null }
+  'usage.setLocalClaude': { enabled: boolean; usage: ClaudeLocalUsage | null; error: string | null }
   'notifications.list': OrbitNotification[]
   'notifications.markRead': void
 
@@ -209,6 +321,45 @@ export interface IpcOutputs {
   'machines.list': Machine[]
   'workflows.list': Workflow[]
   'audit.list': AuditEntry[]
+
+  'constellations.list': ConstellationDefinition[]
+  'constellations.create': ConstellationDefinition
+  'constellations.update': ConstellationDefinition
+  'constellations.delete': void
+  'constellations.duplicate': ConstellationDefinition
+  'constellations.launch': ConstellationRun
+  'constellations.runs': ConstellationRun[]
+  'constellations.run': ConstellationRunDetail
+  'constellations.cancel': ConstellationRun
+  'constellations.resume': ConstellationRun
+  'constellations.workspaceDiff': string
+  'constellations.mergeWorkspace': AgentWorkspace
+  'constellations.discardWorkspace': AgentWorkspace
+
+  'automations.list': Automation[]
+  'automations.runs': AutomationRun[]
+  'automations.create': Automation
+  'automations.update': Automation
+  'automations.delete': void
+  'automations.setStatus': Automation
+  'automations.runNow': AutomationRun
+  'automations.confirmRun': AutomationRun
+  'automations.preview': { next: string[]; error: string | null; description: string | null }
+  'app.launchAtLogin': { enabled: boolean; supported: boolean }
+
+  'runtime.list': RemoteMachine[]
+  'runtime.register': RemoteMachine
+  'runtime.scanHostKey': { fingerprint: string; algorithm: string }
+  'runtime.confirmHostKey': RemoteMachine
+  'runtime.deployPlan': string[]
+  'runtime.deploy': RemoteMachine
+  'runtime.connect': RemoteMachine
+  'runtime.disconnect': void
+  'runtime.revoke': void
+
+  'security.status': SecurityStatus
+  'security.selfTest': SecurityStatus
+  'files.recent': RecentFileChange[]
 }
 
 /** Error shape returned across the bridge (never a raw Error with stack). */
@@ -231,6 +382,7 @@ export type OrbitEvent =
   | { type: 'mission.tool'; toolCall: ToolCall }
   | { type: 'invalidate'; scopes: InvalidateScope[] }
   | { type: 'navigate'; route: string }
+  | { type: 'constellation.signal'; signal: ConstellationSignal }
 
 export type InvalidateScope =
   | 'agents'
@@ -245,6 +397,10 @@ export type InvalidateScope =
   | 'memory'
   | 'settings'
   | 'workflows'
+  | 'constellations'
+  | 'automations'
+  | 'machines'
+  | 'security'
   | 'all'
 
 export const IPC_INVOKE_CHANNEL = 'orbit:invoke'

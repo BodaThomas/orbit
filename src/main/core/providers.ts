@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { eq } from 'drizzle-orm'
 import type { ModelInfo, ProviderId, ProviderInfo } from '@shared/types'
 import type { OrbitDb } from '../infra/db/client'
@@ -10,7 +13,7 @@ import type { SecretCipher } from './platform'
 import type { SettingsStore } from './settings'
 import { nowIso, OrbitError } from './util'
 
-const ORDER: ProviderId[] = ['anthropic', 'openai', 'claude-agent', 'codex', 'gemini', 'grok', 'openrouter', 'ollama', 'demo']
+const ORDER: ProviderId[] = ['claude-code', 'anthropic', 'openai', 'claude-agent', 'codex', 'gemini', 'grok', 'openrouter', 'ollama', 'demo']
 
 export class ProviderRegistry {
   constructor(
@@ -29,7 +32,7 @@ export class ProviderRegistry {
   }
 
   engine(id: ProviderId): AgentEngine | null {
-    return id === 'claude-agent' || id === 'codex' ? (this.engines[id] ?? null) : null
+    return id === 'claude-agent' || id === 'codex' || id === 'claude-code' ? (this.engines[id] ?? null) : null
   }
 
   /** Decrypts the secret for a provider. Main-process only, never crosses IPC. */
@@ -73,9 +76,75 @@ export class ProviderRegistry {
         statusPage: a.statusPage?.page ?? null,
         services: a.statusPage?.services ?? [],
         notes: a.notes,
+        engineFacts: a.capabilities.kind === 'agent' ? this.engineFacts(id, readiness ?? null) : null,
+        engineAuth: readiness?.auth ?? null,
         statusDetail: readiness?.detail ?? (a.capabilities.kind === 'agent' && a.secretFrom && !hasSecret ? `Connectez d’abord ${this.adapters[a.secretFrom].name} : le moteur utilise sa clé.` : null),
       }
     })
+  }
+
+  private engineFacts(id: ProviderId, readiness: EngineReadiness | null): Record<string, string> | null {
+    const facts: Record<string, string> = { ...(readiness?.facts ?? {}) }
+    const model = this.settings.getRaw<string>(`engine:${id}:lastModel`)
+    const at = this.settings.getRaw<string>(`engine:${id}:lastRunAt`)
+    if (model) facts['Modèle utilisé (dernière session)'] = model
+    if (at) facts['Dernière activité'] = at
+    return Object.keys(facts).length ? facts : null
+  }
+
+  /**
+   * « Tester le moteur »: one real, minimal turn in an empty temp folder, with no
+   * permission at all (any tool request is refused). Proves the engine answers.
+   */
+  async testEngine(id: ProviderId): Promise<{ ok: boolean; text: string; model: string | null; durationMs: number; error: string | null; deniedTools: number }> {
+    const engine = this.engine(id)
+    if (!engine) throw new OrbitError('validation', 'Ce fournisseur n’est pas un moteur agent.')
+    const adapter = this.adapter(id)
+    const ws = mkdtempSync(join(tmpdir(), 'orbit-engine-test-'))
+    const t0 = Date.now()
+    let model: string | null = null
+    let deniedTools = 0
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 120_000)
+    try {
+      const res = await engine.run(
+        {
+          runId: `test-${Date.now()}`,
+          sessionId: null,
+          prompt: 'Test de connexion Orbit. Réponds uniquement par « OK », sans utiliser aucun outil.',
+          instructions: 'Tu es testé par Orbit. N’utilise aucun outil.',
+          model: null,
+          policy: { workspace: ws, permissions: { readFiles: true, writeFiles: false, runCommands: false, network: false, manageProjects: false, externalActions: false }, autonomy: 'manual', isolation: 'standard' },
+          secret: adapter.requiresSecret ? this.secretFor(id) : null,
+          budgetUsd: adapter.requiresSecret ? 0.05 : null,
+          signal: controller.signal,
+        },
+        {
+          emit: (e) => {
+            if (e.type === 'session') {
+              model = e.model
+              this.noteEngineSession(id, e.model)
+            }
+          },
+          requestApproval: async () => {
+            deniedTools++
+            return false
+          },
+        },
+      )
+      this.journal.audit({ actor: 'user', agentId: null, action: 'engine.test', target: id, allowed: true, reason: res.status })
+      return { ok: res.status === 'completed', text: res.finalText.slice(0, 400), model, durationMs: Date.now() - t0, error: res.error?.message ?? (res.status === 'cancelled' ? 'Délai dépassé (2 min).' : null), deniedTools }
+    } finally {
+      clearTimeout(timer)
+      rmSync(ws, { recursive: true, force: true })
+    }
+  }
+
+  /** Called by the runner when an engine session starts: real facts only. */
+  noteEngineSession(id: ProviderId, model: string | null): void {
+    if (model) this.settings.setRaw(`engine:${id}:lastModel`, model)
+    this.settings.setRaw(`engine:${id}:lastRunAt`, nowIso())
+    this.bus.invalidate('providers')
   }
 
   info(id: ProviderId): ProviderInfo {

@@ -1,7 +1,8 @@
-import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
+import type { ConfinementSpec } from '../security/seatbelt'
+import { spawnLineProcess } from './process'
 import { EngineError } from './types'
 
 /**
@@ -124,45 +125,16 @@ export function resolveCodexBinary(): { path: string; source: 'env' | 'bundled' 
   return { path: 'codex', source: 'path' }
 }
 
-/** Spawns `codex app-server` with a minimal, explicit environment. */
-export function spawnCodexTransport(cwd: string): RpcTransport {
+/** Spawns `codex app-server` with a minimal, explicit environment (optionally confined). */
+export function spawnCodexTransport(cwd: string, confinement?: ConfinementSpec | null): RpcTransport {
   const { path } = resolveCodexBinary()
-  const env: Record<string, string> = {}
-  for (const k of ['PATH', 'HOME', 'USER', 'LANG', 'TMPDIR', 'SHELL', 'CODEX_HOME', 'SSL_CERT_FILE']) {
-    const v = process.env[k]
-    if (v) env[k] = v
-  }
-  const child = spawn(path, ['app-server'], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] })
-  let buffer = ''
-  const lineListeners: ((l: string) => void)[] = []
-  const exitListeners: ((r: string) => void)[] = []
-  let stderr = ''
-  child.stdout.setEncoding('utf8')
-  child.stdout.on('data', (chunk: string) => {
-    buffer += chunk
-    let i: number
-    while ((i = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, i).trim()
-      buffer = buffer.slice(i + 1)
-      if (line) for (const l of lineListeners) l(line)
-    }
-  })
-  child.stderr.setEncoding('utf8')
-  child.stderr.on('data', (c: string) => (stderr = (stderr + c).slice(-2000)))
-  const exit = (reason: string) => {
-    for (const l of exitListeners.splice(0)) l(reason)
-  }
-  child.on('error', (err: NodeJS.ErrnoException) => exit(err.code === 'ENOENT' ? 'binaire codex introuvable' : err.message))
-  child.on('exit', (code, signal) => exit(signal ? `signal ${signal}` : `code ${code}${stderr ? ` — ${stderr.trim().split('\n').pop()}` : ''}`))
+  const env: Record<string, string | undefined> = {}
+  for (const k of ['PATH', 'HOME', 'USER', 'LANG', 'TMPDIR', 'SHELL', 'CODEX_HOME', 'SSL_CERT_FILE']) env[k] = process.env[k]
+  const proc = spawnLineProcess({ command: path, args: ['app-server'], cwd, env, confinement, label: 'codex' })
   return {
-    write: (line) => {
-      if (child.stdin.writable) child.stdin.write(line + '\n')
-    },
-    onLine: (cb) => lineListeners.push(cb),
-    onExit: (cb) => exitListeners.push(cb),
-    close: () => {
-      child.stdin.end()
-      setTimeout(() => !child.killed && child.kill('SIGTERM'), 1500).unref()
-    },
+    write: (line) => proc.write(line),
+    onLine: (cb) => proc.onLine(cb),
+    onExit: (cb) => proc.onExit((reason) => cb(reason)),
+    close: () => proc.close(),
   }
 }

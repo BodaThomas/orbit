@@ -41,6 +41,9 @@ export type AgentStatus =
 
 export type AutonomyLevel = 'manual' | 'supervised' | 'automated'
 
+/** `standard`: levels 1–2 (Orbit policy + engine sandbox). `strict`: + Orbit Seatbelt read confinement (level 3, host). */
+export type IsolationMode = 'standard' | 'strict'
+
 export interface AgentPermissions {
   readFiles: boolean
   writeFiles: boolean
@@ -62,7 +65,12 @@ export interface Agent {
   autonomy: AutonomyLevel
   permissions: AgentPermissions
   workingDirectory: string | null
-  runtime: 'local'
+  isolation: IsolationMode
+  /** Reasoning effort for engines that support it; null → engine default. */
+  effort: string | null
+  runtime: 'local' | 'remote'
+  /** Remote machine id when `runtime === 'remote'`. */
+  machineId: string | null
   dailyBudgetUsd: number | null
   enabled: boolean
   status: AgentStatus
@@ -76,6 +84,7 @@ export interface Agent {
 export type ProviderId =
   | 'anthropic'
   | 'openai'
+  | 'claude-code'
   | 'claude-agent'
   | 'codex'
   | 'gemini'
@@ -119,6 +128,10 @@ export interface ProviderInfo {
   notes: string
   /** Engines only: human-readable readiness (auth, binary), refreshed by « Vérifier ». */
   statusDetail: string | null
+  /** Engines only: non-secret facts (version, auth method, default model, last activity). */
+  engineFacts: Record<string, string> | null
+  /** Engines only: how usage is billed, as detected (never guessed). */
+  engineAuth: 'api_key' | 'subscription' | 'none' | 'unknown' | null
 }
 
 export type HealthLevel = 'operational' | 'degraded' | 'outage' | 'unknown'
@@ -210,6 +223,12 @@ export interface Mission {
   engine: ProviderId | null
   sessionId: string | null
   workspace: string | null
+  /** Constellation run this mission belongs to (coordinator or delegated sub-mission). */
+  constellationRunId: string | null
+  depth: number
+  subtask: SubtaskSpec | null
+  permissionsOverride: AgentPermissions | null
+  resultData: StructuredResult | null
   createdAt: string
   updatedAt: string
   startedAt: string | null
@@ -289,7 +308,15 @@ export interface FileChange {
   path: string
   kind: 'add' | 'update' | 'delete'
   diff: string | null
+  agentId: string | null
+  /** engine: reported by the engine · git/scan: found by Orbit's snapshot (shell edits included). */
+  source: 'engine' | 'git' | 'scan'
   createdAt: string
+}
+
+export interface RecentFileChange extends FileChange {
+  missionTitle: string
+  missionShortId: string
 }
 
 /** What an approval is about, shown to the user before they decide. */
@@ -334,6 +361,7 @@ export interface MissionDetail {
   executions: MissionExecution[]
   toolCalls: ToolCall[]
   fileChanges: FileChange[]
+  inventories: FileInventory[]
 }
 
 // Activity
@@ -357,6 +385,18 @@ export type ActivityType =
   | 'provider.connected'
   | 'provider.error'
   | 'budget.reached'
+  | 'constellation.created'
+  | 'constellation.started'
+  | 'constellation.delegated'
+  | 'constellation.completed'
+  | 'constellation.failed'
+  | 'constellation.cancelled'
+  | 'automation.started'
+  | 'automation.completed'
+  | 'automation.failed'
+  | 'automation.skipped'
+  | 'runtime.connected'
+  | 'runtime.disconnected'
 
 export type ActivityLevel = 'info' | 'success' | 'warning' | 'error'
 
@@ -387,6 +427,8 @@ export interface UsageRecord {
   costUsd: number | null
   costKind: CostKind
   pricingVersion: string | null
+  /** Subscription usage only: theoretical cost at API list price. Never added to spend. */
+  equivalentUsd: number | null
   source: 'conversation' | 'mission'
   createdAt: string
 }
@@ -403,7 +445,11 @@ export interface UsageSummary {
   yesterday: CostBreakdown
   month: CostBreakdown
   byProviderToday: { providerId: ProviderId; cost: CostBreakdown }[]
-  byAgentMonth: { agentId: string; cost: CostBreakdown; requests: number }[]
+  byAgentMonth: { agentId: string; cost: CostBreakdown; requests: number; tokens: number }[]
+  /** Subscription usage this month: tokens and a theoretical API-price equivalent (never spend). */
+  subscriptionMonth: { requests: number; tokens: number; equivalentUsd: number | null }
+  missionsCancelled: number
+  missionCounts: MissionCounts
   daily: { date: string; official: number; estimated: number; requests: number }[]
   requestsToday: number
   requestsMonth: number
@@ -494,4 +540,311 @@ export interface Bootstrap {
   platform: string
   dataPath: string
   secureStorage: boolean
+}
+
+// Usage and rate limits
+
+/** Official subscription rate-limit window, as reported by the engine itself (never reconstructed). */
+export interface RateLimitWindow {
+  kind: 'five_hour' | 'seven_day' | 'seven_day_opus' | 'seven_day_sonnet' | 'other'
+  /** 0–1 when the engine reports it, null otherwise. */
+  utilization: number | null
+  resetsAt: string | null
+  status: 'allowed' | 'allowed_warning' | 'rejected' | 'unknown'
+}
+
+export interface RateLimitSnapshot {
+  providerId: ProviderId
+  windows: RateLimitWindow[]
+  /** When the engine emitted it (it only does so during a run). */
+  observedAt: string
+  source: string
+}
+
+/** Business definition of what a companion is doing. One function computes it: shared/stats.ts. */
+export type CompanionState = 'available' | 'in_mission' | 'awaiting_approval' | 'error' | 'offline'
+
+export interface TeamCounts {
+  total: number
+  available: number
+  inMission: number
+  awaitingApproval: number
+  /** inMission + awaitingApproval: cannot take new work right now. */
+  busy: number
+  error: number
+  offline: number
+}
+
+export interface MissionCounts {
+  total: number
+  active: number
+  todo: number
+  done: number
+  failed: number
+  cancelled: number
+  /** done / (done + failed). Cancelled missions are excluded: the user stopped them. null when nothing finished. */
+  successRate: number | null
+}
+
+/** How Orbit learnt which files an execution touched. */
+export interface FileInventory {
+  id: string
+  missionId: string
+  executionId: string
+  agentId: string
+  method: 'engine' | 'git' | 'scan'
+  /** false when Orbit knows the list may miss files (ignored files, size cap, concurrent writers…). */
+  complete: boolean
+  note: string | null
+  createdAt: string
+}
+
+export type EffectiveLevel = 'allowed' | 'ask' | 'denied' | 'partial'
+
+export interface EffectivePermissionRow {
+  key: 'read' | 'write' | 'commands' | 'network' | 'external' | 'outside' | 'secrets'
+  label: string
+  /** What the companion settings say. */
+  companion: boolean
+  /** What actually happens at run time, all layers combined. */
+  effective: EffectiveLevel
+  /** Which layer enforces it. */
+  enforcedBy: ('policy' | 'engine' | 'sandbox' | 'isolation' | 'approval')[]
+  detail: string
+}
+
+export interface SecurityStatus {
+  /** Level 3 on this Mac: proof from the empirical self-test. */
+  isolation: { available: boolean; ok: boolean; checkedAt: string | null; checks: { label: string; ok: boolean }[]; error: string | null }
+  events: { id: string; agentId: string | null; missionId: string | null; layer: string; action: string; target: string | null; decision: string; reason: string | null; createdAt: string }[]
+}
+
+/** Read-only totals from Claude Code's local session logs (opt-in). Tokens only, never a quota. */
+export interface ClaudeLocalUsage {
+  scannedAt: string
+  days: number
+  sessions: number
+  messages: number
+  toolCalls: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  byModel: { model: string; messages: number; tokens: number }[]
+  daily: { date: string; tokens: number }[]
+  lastActivity: string | null
+  filesSkipped: number
+}
+
+// Constellations
+
+export interface ConstellationLimits {
+  /** Coordinator delegation rounds (plan → results → maybe plan again). */
+  maxDepth: number
+  maxSubtasks: number
+  maxParallel: number
+  maxDurationMin: number
+  /** Total tokens across every mission of the run; null = no limit. */
+  maxTokens: number | null
+  /** Measured or estimated dollars only; subscription usage cannot be capped in dollars. */
+  maxBudgetUsd: number | null
+}
+
+export interface ConstellationMember {
+  agentId: string
+  role: string
+  responsibilities: string
+  canDelegate: boolean
+}
+
+export interface ConstellationDefinition {
+  id: string
+  name: string
+  description: string
+  objective: string
+  coordinatorAgentId: string
+  members: ConstellationMember[]
+  /** Project folder every member works in (explicitly chosen by the user). */
+  workspace: string | null
+  workspaceMode: 'shared' | 'worktrees'
+  /** Ceiling: a delegated mission never gets more than this, nor more than its companion. */
+  permissions: AgentPermissions
+  limits: ConstellationLimits
+  isTemplate: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type ConstellationRunStatus = 'planning' | 'running' | 'synthesizing' | 'done' | 'failed' | 'cancelled' | 'interrupted'
+
+export interface SubtaskSpec {
+  key: string
+  objective: string
+  expected: string
+  context: string
+  dependsOn: string[]
+  readOnly: boolean
+  round: number
+}
+
+export interface StructuredResult {
+  status: 'done' | 'partial' | 'blocked'
+  summary: string
+  files: string[]
+}
+
+export interface ConstellationTask {
+  missionId: string
+  shortId: string
+  agentId: string
+  title: string
+  status: MissionStatus
+  spec: SubtaskSpec
+  dependsOnMissionIds: string[]
+  permissions: AgentPermissions
+  workspace: string | null
+  result: string | null
+  structured: StructuredResult | null
+  error: string | null
+  startedAt: string | null
+  finishedAt: string | null
+  inputTokens: number
+  outputTokens: number
+  costUsd: number | null
+}
+
+export interface ConstellationRun {
+  id: string
+  constellationId: string
+  constellationName: string
+  goal: string
+  status: ConstellationRunStatus
+  coordinatorAgentId: string
+  coordinatorMissionId: string | null
+  round: number
+  workspace: string | null
+  limits: ConstellationLimits
+  synthesis: string | null
+  error: string | null
+  tokens: number
+  costUsd: number | null
+  origin: 'user' | 'automation'
+  createdAt: string
+  startedAt: string | null
+  finishedAt: string | null
+}
+
+export interface ExecutionHandoff {
+  id: string
+  runId: string
+  kind: 'delegation' | 'result' | 'synthesis'
+  fromAgentId: string
+  toAgentId: string
+  missionId: string | null
+  summary: string
+  payload: string
+  redactions: number
+  createdAt: string
+}
+
+export interface AgentWorkspace {
+  id: string
+  runId: string
+  agentId: string
+  path: string
+  kind: 'shared' | 'worktree'
+  branch: string | null
+  baseRef: string | null
+  status: 'active' | 'ready' | 'merged' | 'discarded' | 'conflict'
+  diffStat: string | null
+  conflictWith: string[]
+  createdAt: string
+}
+
+export interface ConstellationRunDetail {
+  run: ConstellationRun
+  definition: ConstellationDefinition | null
+  tasks: ConstellationTask[]
+  handoffs: ExecutionHandoff[]
+  workspaces: AgentWorkspace[]
+}
+
+/** Pushed when something real travels along a link (drives the light pulse in the UI). */
+export interface ConstellationSignal {
+  runId: string
+  kind: 'delegation' | 'result' | 'synthesis' | 'error' | 'status'
+  fromAgentId: string | null
+  toAgentId: string | null
+  missionId: string | null
+  at: string
+}
+
+// Automations
+
+export type MissedPolicy = 'skip' | 'run_once' | 'ask'
+
+export interface AutomationTrigger {
+  id: string
+  kind: 'mission.completed' | 'mission.failed' | 'automation.completed'
+  sourceAgentId: string | null
+  sourceAutomationId: string | null
+  cooldownSec: number
+}
+
+export interface Automation {
+  id: string
+  name: string
+  description: string
+  targetKind: 'agent' | 'constellation'
+  targetId: string
+  title: string
+  prompt: string
+  recurrence: import('./schedule').Recurrence | null
+  timezone: string
+  status: 'active' | 'paused' | 'completed'
+  missedPolicy: MissedPolicy
+  maxRunsPerDay: number | null
+  nextRunAt: string | null
+  lastRunAt: string | null
+  triggers: AutomationTrigger[]
+  /** Target can write files, run commands or act externally: never relaunched blindly. */
+  sensitive: boolean
+  lastRun: AutomationRun | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AutomationRun {
+  id: string
+  automationId: string
+  scheduledFor: string
+  trigger: 'schedule' | 'missed' | 'manual' | 'event'
+  status: 'pending_confirmation' | 'running' | 'done' | 'failed' | 'skipped' | 'cancelled' | 'uncertain'
+  missionId: string | null
+  constellationRunId: string | null
+  note: string | null
+  startedAt: string | null
+  finishedAt: string | null
+  createdAt: string
+}
+
+// Remote runtime
+
+export interface RemoteMachine {
+  id: string
+  name: string
+  transport: 'ssh' | 'local'
+  host: string | null
+  user: string | null
+  port: number
+  runtimeHome: string
+  hostKeyFingerprint: string | null
+  status: 'new' | 'pending_host_key' | 'ready' | 'online' | 'offline' | 'error' | 'revoked'
+  lastError: string | null
+  lastHeartbeatAt: string | null
+  runtimeVersion: string | null
+  protocol: number | null
+  info: Record<string, string> | null
+  engines: { id: string; available: boolean; detail: string }[]
+  runningMissions: number
+  createdAt: string
 }

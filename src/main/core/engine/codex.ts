@@ -1,5 +1,6 @@
-import type { ToolKind } from '@shared/types'
-import { CodexRpc, spawnCodexTransport, type RpcTransport } from './codex-rpc'
+import type { RateLimitSnapshot, ToolKind } from '@shared/types'
+import { engineConfinement, type ConfinementSpec } from '../security/seatbelt'
+import { CodexRpc, resolveCodexBinary, spawnCodexTransport, type RpcTransport } from './codex-rpc'
 import { evaluateTool, isInside } from './policy'
 import { EngineError, type AgentEngine, type EngineIO, type EngineReadiness, type EngineRunRequest, type EngineRunResult, type RunPolicy, type ToolStart } from './types'
 
@@ -63,9 +64,11 @@ export function codexSandbox(policy: RunPolicy): { mode: 'read-only' | 'workspac
     sandboxPolicy: canWriteFreely
       ? { type: 'workspaceWrite', writableRoots: [workspace], networkAccess: p.network, excludeTmpdirEnvVar: false, excludeSlashTmp: false }
       : { type: 'readOnly', networkAccess: p.network },
-    // Commands run freely *inside* the sandbox (read-only, no network unless allowed):
-    // anything that must leave it - a write, network - is escalated to Orbit.
-    approvalPolicy: 'on-request',
+    // With « run commands »: commands run freely *inside* the sandbox (read-only, no network
+    // unless allowed) and anything leaving it is escalated to Orbit. Without it: « untrusted »,
+    // only Codex's own safe read commands (ls, cat, rg…) run; every other command is escalated
+    // to Orbit, whose policy refuses it. The permission is never merely cosmetic.
+    approvalPolicy: p.runCommands ? 'on-request' : 'untrusted',
   }
 }
 
@@ -122,8 +125,34 @@ function mapCodexError(message: string): EngineError {
   return new EngineError('unknown', message)
 }
 
+interface CodexRateWindow {
+  usedPercent: number
+  windowDurationMins: number | null
+  resetsAt: number | null
+}
+export interface CodexRateLimitSnapshot {
+  primary: CodexRateWindow | null
+  secondary: CodexRateWindow | null
+  rateLimitReachedType?: string | null
+}
+
+/** Official Codex rate limits (account/rateLimits) → Orbit snapshot. Never reconstructed from tokens. */
+export function codexRateLimits(r: CodexRateLimitSnapshot | null | undefined): RateLimitSnapshot | null {
+  if (!r) return null
+  const windows = [r.primary, r.secondary]
+    .filter((w): w is CodexRateWindow => Boolean(w))
+    .map((w) => ({
+      kind: (w.windowDurationMins === 300 ? 'five_hour' : w.windowDurationMins === 10080 ? 'seven_day' : 'other') as RateLimitSnapshot['windows'][number]['kind'],
+      utilization: Math.max(0, Math.min(1, w.usedPercent / 100)),
+      resetsAt: w.resetsAt ? new Date(w.resetsAt * 1000).toISOString() : null,
+      status: (r.rateLimitReachedType ? 'rejected' : w.usedPercent >= 90 ? 'allowed_warning' : 'allowed') as RateLimitSnapshot['windows'][number]['status'],
+    }))
+  if (!windows.length) return null
+  return { providerId: 'codex', windows, observedAt: new Date().toISOString(), source: 'Codex app-server · account/rateLimits' }
+}
+
 export interface CodexEngineOptions {
-  transportFactory?: (cwd: string) => RpcTransport
+  transportFactory?: (cwd: string, confinement?: ConfinementSpec | null) => RpcTransport
   clientVersion: string
 }
 
@@ -151,7 +180,7 @@ export function createCodexEngine(opts: CodexEngineOptions): AgentEngine {
   return {
     id: 'codex',
     name: 'Codex',
-    capabilities: { resume: true, approvals: true, interrupt: true, fileDiffs: true, budgetCap: false, usage: 'official' },
+    capabilities: { resume: true, approvals: true, interrupt: true, fileDiffs: true, budgetCap: false, usage: 'official', confinable: true, effort: true },
 
     async checkReady() {
       const transport = makeTransport(process.env.HOME ?? '/')
@@ -178,6 +207,21 @@ export function createCodexEngine(opts: CodexEngineOptions): AgentEngine {
         })
         const res = await rpc.request<{ data: { id: string; displayName: string; description: string; hidden: boolean; isDefault: boolean }[] }>('model/list', { limit: 50 })
         return res.data.filter((m) => !m.hidden).map((m) => ({ id: m.id, label: m.displayName || m.id, hint: m.isDefault ? 'Par défaut' : undefined }))
+      } finally {
+        transport.close()
+      }
+    },
+
+    async readRateLimits() {
+      const transport = makeTransport(process.env.HOME ?? '/')
+      try {
+        const rpc = await connect(transport, opts.clientVersion, () => {}, async () => {
+          throw new Error('unsupported')
+        })
+        const res = await rpc.request<{ rateLimits: CodexRateLimitSnapshot }>('account/rateLimits/read', { excludeResetCreditDetails: true })
+        return codexRateLimits(res.rateLimits)
+      } catch {
+        return null
       } finally {
         transport.close()
       }
@@ -263,6 +307,11 @@ export function createCodexEngine(opts: CodexEngineOptions): AgentEngine {
             else error = mapCodexError(e.error.message)
             return
           }
+          case 'account/rateLimits/updated': {
+            const snap = codexRateLimits((p as { rateLimits: CodexRateLimitSnapshot }).rateLimits)
+            if (snap) io.emit({ type: 'rate_limit', snapshot: snap })
+            return
+          }
           case 'turn/completed': {
             const turn = p.turn as Turn
             if (turnId && turn.id === turnId) settle(turn)
@@ -313,7 +362,7 @@ export function createCodexEngine(opts: CodexEngineOptions): AgentEngine {
         throw new Error('Non pris en charge par Orbit : refusé.')
       }
 
-      const transport = makeTransport(ws)
+      const transport = makeTransport(ws, engineConfinement('codex', policy, { binary: resolveCodexBinary().path }))
       let rpc: CodexRpc | null = null
       const onAbort = () => {
         if (rpc && threadId && turnId) void rpc.request('turn/interrupt', { threadId, turnId }).catch(() => undefined)
@@ -349,6 +398,7 @@ export function createCodexEngine(opts: CodexEngineOptions): AgentEngine {
           cwd: ws,
           approvalPolicy: sandbox.approvalPolicy,
           sandboxPolicy: sandbox.sandboxPolicy,
+          ...(req.effort ? { effort: req.effort } : {}),
         })
         turnId = started.turn.id
         const early = earlyTurns.get(turnId)

@@ -7,6 +7,14 @@ import { ProviderError, plannedAdapter, type ProviderAdapter, type StatusPageSou
 export const ADAPTERS: Record<ProviderId, ProviderAdapter> = {
   anthropic: anthropicAdapter,
   openai: openaiAdapter,
+  'claude-code': engineAdapter({
+    id: 'claude-code',
+    name: 'Claude Code',
+    defaultModels: [{ id: 'default', label: 'Modèle par défaut du compte', hint: 'Choisi par Claude Code selon votre abonnement' }],
+    statusPage: anthropicAdapter.statusPage,
+    notes:
+      'Votre installation locale et officielle de Claude Code (binaire « claude »), avec votre propre connexion (abonnement Claude ou clé). Orbit pilote le CLI par son protocole structuré (stream-json) : il ne lit jamais vos identifiants. Chaque action sensible passe par la politique d’Orbit.',
+  }),
   'claude-agent': engineAdapter({
     id: 'claude-agent',
     name: 'Claude Agent SDK',

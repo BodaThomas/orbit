@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, safeStorage, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, powerMonitor, safeStorage, session, shell } from 'electron'
+import { killAllEngineProcesses } from './core/engine/process'
 import { IPC_EVENT_CHANNEL, IPC_INVOKE_CHANNEL } from '@shared/ipc'
 import type { Bootstrap } from '@shared/types'
 import { EventBus } from './core/event-bus'
@@ -56,6 +57,10 @@ const platform: PlatformServices = {
   },
   fetch: (...args) => fetch(...args),
   appVersion: app.getVersion(),
+  runtimeBundle: () => {
+    const f = join(app.getAppPath(), 'out', 'runtime', 'orbit-runtime.mjs')
+    return existsSync(f) ? f : null
+  },
 }
 
 let runtime: OrbitRuntime | null = null
@@ -91,6 +96,14 @@ const host: HostApi = {
   async openExternal(url) {
     if (!/^https:\/\//.test(url)) return
     await shell.openExternal(url)
+  },
+  launchAtLogin(enabled) {
+    const supported = process.platform === 'darwin' && app.isPackaged
+    if (enabled !== undefined && supported) {
+      app.setLoginItemSettings({ openAtLogin: enabled })
+      runtime?.journal.audit({ actor: 'user', agentId: null, action: 'app.launchAtLogin', target: enabled ? 'on' : 'off', allowed: true, reason: null })
+    }
+    return { enabled: supported ? app.getLoginItemSettings().openAtLogin : false, supported }
   },
   async chooseDirectory() {
     const res = await dialog.showOpenDialog(mainWindow!, { properties: ['openDirectory', 'createDirectory'], message: 'Dossier de travail du compagnon' })
@@ -231,6 +244,8 @@ app.whenReady().then(() => {
 
   createWindow()
   app.on('activate', showWindow)
+  // After sleep, the scheduler checks immediately (missed occurrences follow their policy).
+  powerMonitor.on('resume', () => void runtime?.scheduler.tick())
   if (!app.isPackaged && process.env.ORBIT_CAPTURE_STEPS) void runCaptureSteps()
 })
 
@@ -277,4 +292,6 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   runtime?.dispose()
   runtime = null
+  // No engine process (and none of their commands) may outlive Orbit.
+  killAllEngineProcesses()
 })

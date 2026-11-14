@@ -2,7 +2,9 @@ import { and, eq } from 'drizzle-orm'
 import type { Agent, ExecutionEvent, LiveActivity, Mission, ToolCall } from '@shared/types'
 import type { OrbitDb } from '../infra/db/client'
 import { toApproval, toExecutionEvent, toToolCall } from '../infra/db/mappers'
-import { approvalRequests, executionEvents, fileChanges, missions, toolCalls } from '../infra/db/schema'
+import { approvalRequests, executionEvents, fileChanges, fileInventories, missions, subscriptionUsageRecords, toolCalls } from '../infra/db/schema'
+import { takeSnapshot } from './files/snapshot'
+import type { SecurityService } from './security/service'
 import type { AgentManager } from './agents'
 import type { AgentEngine, ApprovalAsk, EngineEvent, EngineId, EngineRunResult, UsageReport } from './engine/types'
 import type { EventBus } from './event-bus'
@@ -19,7 +21,15 @@ export interface AgentRunJob {
   instructions: string
   secret: string | null
   budgetUsd: number | null
+  /** Permissions for this run (a delegated sub-mission may get fewer than the companion). */
+  permissions?: Agent['permissions']
+  /** Runs on a remote machine: no local snapshot (the files are not on this Mac). */
+  remote?: boolean
+  /** Folder for this run when it differs from the mission's (constellation worktree). */
+  workspace?: string
   signal: AbortSignal
+  /** Called when the engine reports its session (real model in use). */
+  onSession?(model: string | null): void
   /** Called when the run starts or stops waiting on a human. */
   onWaiting(waiting: boolean): void
 }
@@ -33,6 +43,10 @@ export interface AgentRunOutcome extends EngineRunResult {
  * tool call rows, file changes, approval requests, timeline events, live activity, usage.
  */
 export class AgentRunner {
+  /** workspace → number of runs currently working in it (attribution of snapshot changes). */
+  private activeWorkspaces = new Map<string, number>()
+  /** workspace → number of runs ever started in it (detects overlaps that already ended). */
+  private workspaceEpoch = new Map<string, number>()
   /** approvalId → resolver of the engine's pending question. */
   private pendingApprovals = new Map<string, { missionId: string; resolve: (ok: boolean, cancelled?: boolean) => void }>()
 
@@ -42,6 +56,7 @@ export class AgentRunner {
     private journal: Journal,
     private agents: AgentManager,
     private usage: UsageTracker,
+    private security: SecurityService | null = null,
   ) {}
 
   hasPendingApproval(approvalId: string): boolean {
@@ -107,6 +122,7 @@ export class AgentRunner {
     const onEvent = (e: EngineEvent) => {
       switch (e.type) {
         case 'session':
+          job.onSession?.(e.model)
           if (e.sessionId !== sessionId) {
             sessionId = e.sessionId
             this.db.update(missions).set({ sessionId: e.sessionId, updatedAt: nowIso() }).where(eq(missions.id, missionId)).run()
@@ -139,11 +155,15 @@ export class AgentRunner {
           if (e.tool.exitCode !== undefined) patch.exitCode = e.tool.exitCode
           if (e.tool.files) patch.files = e.tool.files
           this.db.update(toolCalls).set(patch).where(eq(toolCalls.id, id)).run()
+          if (e.tool.status === 'denied' && current?.status !== 'denied') {
+            const row = this.db.select({ title: toolCalls.title }).from(toolCalls).where(eq(toolCalls.id, id)).get()
+            this.security?.audit({ agentId: agent.id, missionId, layer: 'policy', action: 'tool.denied', target: row?.title ?? null, decision: 'deny', reason: e.tool.output ?? null })
+          }
           pushTool(id)
           return
         }
         case 'file.changed':
-          this.db.insert(fileChanges).values({ id: newId(), missionId, executionId, path: e.change.path, kind: e.change.kind, diff: e.change.diff, createdAt: nowIso() }).run()
+          this.db.insert(fileChanges).values({ id: newId(), missionId, executionId, path: e.change.path, kind: e.change.kind, diff: e.change.diff, agentId: agent.id, source: 'engine', createdAt: nowIso() }).run()
           event('file', e.change.path, { kind: e.change.kind })
           this.journal.activity({ type: 'file.written', agentId: agent.id, missionId, title: `${agent.name} a modifié un fichier`, detail: e.change.path })
           this.bus.invalidate('missions')
@@ -157,7 +177,8 @@ export class AgentRunner {
             inputTokens: u.inputTokens,
             outputTokens: u.outputTokens,
             source: 'mission',
-            cost: u.costKind === 'estimated' && u.costUsd != null ? { costUsd: u.costUsd, costKind: 'estimated', pricingVersion: `${job.engine.id}-sdk` } : u.costKind === 'subscription' ? { costUsd: null, costKind: 'subscription', pricingVersion: null } : undefined,
+            cost: u.costKind === 'estimated' && u.costUsd != null ? { costUsd: u.costUsd, costKind: 'estimated', pricingVersion: `${job.engine.id}-sdk` } : u.costKind === 'subscription' ? { costUsd: null, costKind: 'subscription', pricingVersion: null } : u.costKind === 'unknown' ? { costUsd: null, costKind: 'unknown', pricingVersion: null } : undefined,
+            equivalentUsd: u.equivalentUsd ?? null,
           })
           totals.inputTokens += u.inputTokens
           totals.outputTokens += u.outputTokens
@@ -168,6 +189,10 @@ export class AgentRunner {
         }
         case 'warning':
           event('warning', e.message)
+          return
+        case 'rate_limit':
+          this.db.insert(subscriptionUsageRecords).values({ id: newId(), providerId: e.snapshot.providerId, windows: e.snapshot.windows, source: e.snapshot.source, observedAt: e.snapshot.observedAt }).run()
+          this.bus.invalidate('usage', 'providers')
           return
       }
     }
@@ -185,7 +210,7 @@ export class AgentRunner {
         .run()
       event('approval', `Demande de validation : ${ask.summary}`, { approvalId: id, toolCallId })
       this.journal.activity({ type: 'approval.requested', level: 'warning', agentId: agent.id, missionId, title: 'Validation demandée', detail: summary })
-      this.journal.notify('approval', `${agent.name} attend votre accord`, ask.summary, `/missions/${missionId}`)
+      this.journal.notify('approval', `${agent.name} demande votre accord`, ask.summary, `/missions/${missionId}?approval=${id}`)
       waiting++
       if (waiting === 1) job.onWaiting(true)
       setActivity('approval', `Attend votre accord : ${ask.summary}`, toolCallId)
@@ -196,6 +221,7 @@ export class AgentRunner {
           resolve: (ok, cancelled = false) => {
             waiting--
             if (waiting === 0) job.onWaiting(false)
+            this.security?.audit({ agentId: agent.id, missionId, layer: 'approval', action: ask.tool.kind, target: ask.summary, decision: ok ? 'approved' : 'denied', reason: cancelled ? 'Mission arrêtée avant la réponse.' : null })
             // Orbit records the human decision itself: the engine's later report cannot overwrite it.
             const status = ok ? 'running' : cancelled ? 'cancelled' : 'denied'
             this.db
@@ -213,7 +239,15 @@ export class AgentRunner {
     }
 
     setActivity('starting', `Démarre ${job.engine.name}`)
+    const workspace = job.workspace ?? mission.workspace!
+    const permissions = job.permissions ?? agent.permissions
+    const shared = (this.activeWorkspaces.get(workspace) ?? 0) > 0
+    this.activeWorkspaces.set(workspace, (this.activeWorkspaces.get(workspace) ?? 0) + 1)
+    const epoch = (this.workspaceEpoch.get(workspace) ?? 0) + 1
+    this.workspaceEpoch.set(workspace, epoch)
+    const snapshot = job.remote ? null : await takeSnapshot(workspace)
     let result: EngineRunResult
+    let concurrent = shared
     try {
       result = await job.engine.run(
         {
@@ -222,14 +256,17 @@ export class AgentRunner {
           prompt: job.prompt,
           instructions: job.instructions,
           model: agent.model && agent.model !== 'default' ? agent.model : null,
-          policy: { workspace: mission.workspace!, permissions: agent.permissions, autonomy: agent.autonomy },
+          policy: { workspace, permissions, autonomy: agent.autonomy, isolation: agent.isolation },
           secret: job.secret,
           budgetUsd: job.budgetUsd,
+          effort: agent.effort,
           signal: job.signal,
         },
         { emit: onEvent, requestApproval },
       )
     } finally {
+      concurrent = concurrent || (this.activeWorkspaces.get(workspace) ?? 1) > 1 || this.workspaceEpoch.get(workspace) !== epoch
+      this.activeWorkspaces.set(workspace, (this.activeWorkspaces.get(workspace) ?? 1) - 1)
       this.denyAllFor(missionId)
       // Tools left open by an interrupted run are closed, never left « running » forever.
       this.db
@@ -244,11 +281,55 @@ export class AgentRunner {
         .run()
       this.bus.emit({ type: 'mission.activity', missionId, activity: null })
     }
+    await this.recordInventory({ missionId, executionId, agentId: agent.id, snapshot, concurrent, engineReportsFiles: job.engine.capabilities.fileDiffs, remote: Boolean(job.remote) })
     return { ...result, sessionId: result.sessionId ?? sessionId, usage: totals }
   }
 
   static engineIdOf(providerId: string): EngineId | null {
-    return providerId === 'claude-agent' || providerId === 'codex' ? providerId : null
+    return providerId === 'claude-agent' || providerId === 'codex' || providerId === 'claude-code' ? providerId : null
+  }
+
+  /**
+   * Merges the engine's own file reports with Orbit's before/after snapshot, so shell
+   * modifications appear too. Records how complete the list is - never claims more.
+   */
+  private async recordInventory(o: { missionId: string; executionId: string; agentId: string; snapshot: Awaited<ReturnType<typeof takeSnapshot>>; concurrent: boolean; engineReportsFiles: boolean; remote: boolean }) {
+    const notes: string[] = []
+    let complete: boolean
+    let method: 'engine' | 'git' | 'scan' = 'engine'
+    try {
+      if (!o.snapshot) {
+        complete = false
+        notes.push(o.remote ? 'Machine distante : seule la liste rapportée par le moteur est disponible.' : 'Instantané du dossier impossible : seule la liste du moteur est disponible.')
+      } else {
+        const res = await o.snapshot.diff()
+        method = res.method
+        complete = res.complete
+        notes.push(...res.notes)
+        const reported = this.db.select().from(fileChanges).where(eq(fileChanges.executionId, o.executionId)).all()
+        for (const c of res.changes) {
+          const known = reported.find((r) => r.path === c.path)
+          if (known) {
+            if (!known.diff && c.diff) this.db.update(fileChanges).set({ diff: c.diff }).where(eq(fileChanges.id, known.id)).run()
+            continue
+          }
+          this.db.insert(fileChanges).values({ id: newId(), missionId: o.missionId, executionId: o.executionId, path: c.path, kind: c.kind, diff: c.diff, agentId: o.agentId, source: res.method, createdAt: nowIso() }).run()
+        }
+      }
+      if (o.concurrent) {
+        complete = false
+        notes.push('Un autre compagnon travaillait dans ce dossier au même moment : certaines modifications peuvent être les siennes.')
+      }
+      this.db.insert(fileInventories).values({ id: newId(), missionId: o.missionId, executionId: o.executionId, agentId: o.agentId, method, complete, note: notes.join(' ') || null, createdAt: nowIso() }).run()
+    } catch (err) {
+      // Inventory never fails a mission.
+      try {
+        this.db.insert(fileInventories).values({ id: newId(), missionId: o.missionId, executionId: o.executionId, agentId: o.agentId, method, complete: false, note: `Inventaire incomplet : ${err instanceof Error ? err.message : String(err)}`, createdAt: nowIso() }).run()
+      } catch {
+        /* mission deleted meanwhile */
+      }
+    }
+    this.bus.invalidate('missions')
   }
 
   /** Used by tests and the approval UI. */

@@ -1,4 +1,4 @@
-import type { AgentPermissions, ApprovalPayload, AutonomyLevel, CostKind, FileChange, ToolCallStatus, ToolKind } from '@shared/types'
+import type { AgentPermissions, ApprovalPayload, AutonomyLevel, CostKind, FileChange, IsolationMode, RateLimitSnapshot, ToolCallStatus, ToolKind } from '@shared/types'
 
 /**
  * Common contract between Orbit and every agent engine (Claude Agent SDK, Codex app-server…).
@@ -8,7 +8,7 @@ import type { AgentPermissions, ApprovalPayload, AutonomyLevel, CostKind, FileCh
  * that this contract cannot express stays inside the adapter (see `raw` on events).
  */
 
-export type EngineId = 'claude-agent' | 'codex'
+export type EngineId = 'claude-agent' | 'codex' | 'claude-code'
 
 export interface EngineCapabilities {
   /** The engine keeps a resumable session across runs and app restarts. */
@@ -23,6 +23,10 @@ export interface EngineCapabilities {
   budgetCap: boolean
   /** Where the token counts come from. */
   usage: 'official' | 'none'
+  /** Orbit can wrap the engine's whole process tree in its Seatbelt profile (level 3). */
+  confinable: boolean
+  /** The engine lets the caller pick a reasoning effort. */
+  effort: boolean
 }
 
 export interface EngineReadiness {
@@ -31,6 +35,8 @@ export interface EngineReadiness {
   detail: string
   /** Account kind when known: drives how costs are labelled. */
   auth: 'api_key' | 'subscription' | 'none' | 'unknown'
+  /** Optional facts for the settings screen (never a secret): version, auth method, plan… */
+  facts?: Record<string, string>
 }
 
 /** Everything the policy needs to decide. Built by Orbit from the companion, never by the model. */
@@ -38,6 +44,8 @@ export interface RunPolicy {
   workspace: string
   permissions: AgentPermissions
   autonomy: AutonomyLevel
+  /** `strict`: the engine process tree runs under Orbit's Seatbelt profile (proven by self-test). */
+  isolation: IsolationMode
 }
 
 export interface EngineRunRequest {
@@ -54,6 +62,8 @@ export interface EngineRunRequest {
   secret: string | null
   /** Hard dollar cap for this run when the engine can enforce one. */
   budgetUsd: number | null
+  /** Reasoning effort when the engine supports it; null → engine default. */
+  effort?: string | null
   signal: AbortSignal
 }
 
@@ -82,6 +92,8 @@ export interface UsageReport {
   /** Cost computed by the engine itself (Agent SDK list-price estimate), if any. */
   costUsd: number | null
   costKind: CostKind
+  /** Subscription runs: what the same tokens would cost at API list price (never spend). */
+  equivalentUsd?: number | null
 }
 
 export type EngineEvent =
@@ -94,6 +106,8 @@ export type EngineEvent =
   | { type: 'file.changed'; change: Pick<FileChange, 'path' | 'kind' | 'diff'> }
   | { type: 'usage'; usage: UsageReport }
   | { type: 'warning'; message: string }
+  /** Official subscription rate-limit information emitted by the engine itself. */
+  | { type: 'rate_limit'; snapshot: RateLimitSnapshot }
 
 export interface ApprovalAsk {
   externalId: string
@@ -133,6 +147,8 @@ export interface AgentEngine {
   capabilities: EngineCapabilities
   checkReady(secret: string | null): Promise<EngineReadiness>
   listModels?(): Promise<{ id: string; label: string; hint?: string }[]>
+  /** Official subscription quota, only if the engine itself exposes it. */
+  readRateLimits?(): Promise<RateLimitSnapshot | null>
   /** Never throws: failures are returned in the result. */
   run(req: EngineRunRequest, io: EngineIO): Promise<EngineRunResult>
 }

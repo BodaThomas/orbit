@@ -2,7 +2,9 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import type { CanUseTool, HookCallback, Options, PermissionResult, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
+import { spawn } from 'node:child_process'
+import type { CanUseTool, HookCallback, Options, PermissionResult, Query, SDKMessage, SpawnedProcess, SpawnOptions } from '@anthropic-ai/claude-agent-sdk'
+import { confine, engineConfinement } from '../security/seatbelt'
 import type { ToolKind } from '@shared/types'
 import { evaluateTool, type ToolAction } from './policy'
 import { EngineError, type AgentEngine, type EngineIO, type EngineRunRequest, type EngineRunResult, type RunPolicy, type ToolStart, type UsageReport } from './types'
@@ -72,7 +74,7 @@ export function describeClaudeTool(name: string, rawInput: unknown, workspace: s
   }
 }
 
-function changedPathFor(name: string, input: Record<string, unknown>): string | null {
+export function changedPathFor(name: string, input: Record<string, unknown>): string | null {
   if (name === 'Edit' || name === 'Write') return str(input.file_path) ?? null
   if (name === 'NotebookEdit') return str(input.notebook_path) ?? null
   return null
@@ -109,7 +111,7 @@ export function createClaudeAgentEngine(opts: ClaudeEngineOptions): AgentEngine 
   return {
     id: 'claude-agent',
     name: 'Claude Agent SDK',
-    capabilities: { resume: true, approvals: true, interrupt: true, fileDiffs: false, budgetCap: true, usage: 'official' },
+    capabilities: { resume: true, approvals: true, interrupt: true, fileDiffs: false, budgetCap: true, usage: 'official', confinable: true, effort: true },
 
     async checkReady(secret) {
       if (!secret) return { ready: false, detail: 'Connectez d’abord Anthropic (clé API Console) : le moteur l’utilise.', auth: 'none' }
@@ -188,6 +190,7 @@ export function createClaudeAgentEngine(opts: ClaudeEngineOptions): AgentEngine 
       }
 
       mkdirSync(opts.configDir, { recursive: true })
+      const confinement = engineConfinement('claude-agent', policy, { configDir: opts.configDir, binary: opts.pathToExecutable })
       const env: Record<string, string | undefined> = {
         PATH: process.env.PATH,
         HOME: process.env.HOME,
@@ -225,7 +228,17 @@ export function createClaudeAgentEngine(opts: ClaudeEngineOptions): AgentEngine 
         },
         includePartialMessages: true,
         maxBudgetUsd: req.budgetUsd ?? undefined,
+        effort: (req.effort as Options['effort']) ?? undefined,
         env,
+        // Level 3: the whole Claude Code process tree under Orbit's Seatbelt profile.
+        ...(confinement
+          ? {
+              spawnClaudeCodeProcess: (o: SpawnOptions): SpawnedProcess => {
+                const c = confine(o.command, o.args, confinement)
+                return spawn(c.command, c.args, { cwd: o.cwd, env: o.env as NodeJS.ProcessEnv, stdio: ['pipe', 'pipe', 'pipe'], signal: o.signal })
+              },
+            }
+          : {}),
         pathToClaudeCodeExecutable: opts.pathToExecutable,
         stderr: (d) => {
           stderrTail.push(d)

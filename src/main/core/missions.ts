@@ -1,10 +1,12 @@
 import { existsSync, statSync } from 'node:fs'
 import { and, asc, count, desc, eq, inArray } from 'drizzle-orm'
 import { canTransition, MISSION_STATUS_LABELS } from '@shared/mission-states'
-import type { Agent, ApprovalRequest, ExecutionEvent, Mission, MissionDetail, MissionPriority, MissionStatus } from '@shared/types'
+import type { Agent, AgentPermissions, ApprovalRequest, ExecutionEvent, Mission, MissionDetail, MissionPriority, MissionStatus, RecentFileChange, StructuredResult, SubtaskSpec } from '@shared/types'
 import type { OrbitDb } from '../infra/db/client'
-import { toApproval, toExecution, toExecutionEvent, toFileChange, toMission, toToolCall } from '../infra/db/mappers'
-import { approvalRequests, executionEvents, fileChanges, missionExecutions, missions, toolCalls } from '../infra/db/schema'
+import { toApproval, toExecution, toExecutionEvent, toFileChange, toInventory, toMission, toToolCall } from '../infra/db/mappers'
+import { agents, approvalRequests, executionEvents, fileChanges, fileInventories, missionExecutions, missions, toolCalls } from '../infra/db/schema'
+import { isSafeProjectName } from '../../runtime/protocol'
+import type { AgentEngine } from './engine/types'
 import type { StreamChunk } from '../infra/providers'
 import type { AgentRunner } from './agent-runner'
 import type { AgentManager } from './agents'
@@ -13,10 +15,25 @@ import type { Journal } from './journal'
 import type { MemoryStore } from './memory'
 import type { PermissionManager } from './permissions'
 import type { ProviderRegistry } from './providers'
+import type { SecurityService } from './security/service'
 import type { UsageTracker } from './usage'
 import { newId, nowIso, OrbitError, shortId } from './util'
 
 const OUTPUT_FLUSH_MS = 1200
+const REMOTE_PENDING_PREFIX = 'En attente de resynchronisation'
+const REMOTE_PENDING = `${REMOTE_PENDING_PREFIX} : Orbit a été fermé ou a perdu la connexion ; la mission a pu continuer sur la machine distante. Son résultat sera récupéré à la reconnexion.`
+
+export function intersectPermissions(a: AgentPermissions, b: AgentPermissions | null | undefined): AgentPermissions {
+  if (!b) return { ...a }
+  return {
+    readFiles: a.readFiles && b.readFiles,
+    writeFiles: a.writeFiles && b.writeFiles,
+    runCommands: a.runCommands && b.runCommands,
+    network: a.network && b.network,
+    manageProjects: a.manageProjects && b.manageProjects,
+    externalActions: a.externalActions && b.externalActions,
+  }
+}
 
 /** Orbit's rules appended to every engine session. Enforcement itself lives in the tool policy. */
 function engineRules(agent: Agent, workspace: string): string {
@@ -32,6 +49,9 @@ function engineRules(agent: Agent, workspace: string): string {
 
 export class MissionManager {
   private running = new Map<string, AbortController>()
+  /** Remote companions run on a machine's runtime (set by the runtime when remote support exists). */
+  remoteEngine: ((agent: Agent) => AgentEngine) | null = null
+  private idleWaiters = new Map<string, (() => void)[]>()
 
   constructor(
     private db: OrbitDb,
@@ -43,6 +63,7 @@ export class MissionManager {
     private permissions: PermissionManager,
     private memory: MemoryStore,
     private runner: AgentRunner,
+    private security: SecurityService | null = null,
   ) {}
 
   // Queries
@@ -75,7 +96,21 @@ export class MissionManager {
       executions: this.db.select().from(missionExecutions).where(eq(missionExecutions.missionId, id)).orderBy(asc(missionExecutions.startedAt)).all().map(toExecution),
       toolCalls: this.db.select().from(toolCalls).where(eq(toolCalls.missionId, id)).orderBy(asc(toolCalls.createdAt)).all().map(toToolCall),
       fileChanges: this.db.select().from(fileChanges).where(eq(fileChanges.missionId, id)).orderBy(asc(fileChanges.createdAt)).all().map(toFileChange),
+      inventories: this.db.select().from(fileInventories).where(eq(fileInventories.missionId, id)).orderBy(asc(fileInventories.createdAt)).all().map(toInventory),
     }
+  }
+
+  /** Latest file changes across missions, newest first, with their mission. */
+  recentFiles(agentId?: string, limit = 200): RecentFileChange[] {
+    const rows = this.db
+      .select({ f: fileChanges, title: missions.title, shortId: missions.shortId, missionAgent: missions.agentId })
+      .from(fileChanges)
+      .innerJoin(missions, eq(missions.id, fileChanges.missionId))
+      .where(agentId ? eq(missions.agentId, agentId) : undefined)
+      .orderBy(desc(fileChanges.createdAt))
+      .limit(limit)
+      .all()
+    return rows.map((r) => ({ ...toFileChange(r.f), agentId: r.f.agentId ?? r.missionAgent, missionTitle: r.title, missionShortId: r.shortId }))
   }
 
   approvals(status?: ApprovalRequest['status']): ApprovalRequest[] {
@@ -95,10 +130,35 @@ export class MissionManager {
 
   // Commands
 
-  create(input: { title: string; description: string; agentId: string; priority: MissionPriority; startNow: boolean }): Mission {
+  create(input: {
+    title: string
+    description: string
+    agentId: string
+    priority: MissionPriority
+    startNow: boolean
+    /** Constellations: explicit folder chosen by the user for the whole run (or a worktree). */
+    workspace?: string | null
+    constellationRunId?: string | null
+    parentMissionId?: string | null
+    depth?: number
+    subtask?: SubtaskSpec | null
+    permissionsOverride?: AgentPermissions | null
+    origin?: 'user' | 'automation'
+  }): Mission {
     const agent = this.agents.get(input.agentId)
     const engine = this.providers.engine(agent.providerId)
-    const workspace = engine ? this.requireWorkspace(agent) : null
+    let workspace: string | null = null
+    if (agent.runtime === 'remote') {
+      // On a remote machine the « folder » is a project name under the runtime's home.
+      if (!engine) throw new OrbitError('validation', 'Seuls les moteurs agents (Claude Code, Codex) peuvent travailler sur une machine distante.')
+      if (!agent.workingDirectory || !isSafeProjectName(agent.workingDirectory)) throw new OrbitError('validation', `Choisissez le projet distant de ${agent.name} (nom simple, sans chemin).`)
+      workspace = agent.workingDirectory
+    } else if (engine) {
+      if (input.workspace) {
+        this.checkWorkspace(input.workspace, agent)
+        workspace = input.workspace
+      } else workspace = this.requireWorkspace(agent)
+    }
     const ts = nowIso()
     const row = {
       id: newId(),
@@ -110,14 +170,54 @@ export class MissionManager {
       status: 'todo',
       engine: engine ? agent.providerId : null,
       workspace,
+      constellationRunId: input.constellationRunId ?? null,
+      parentMissionId: input.parentMissionId ?? null,
+      depth: input.depth ?? 0,
+      subtask: input.subtask ?? null,
+      permissionsOverride: input.permissionsOverride ?? null,
       createdAt: ts,
       updatedAt: ts,
     }
     this.db.insert(missions).values(row).run()
-    this.journal.activity({ type: 'mission.created', agentId: agent.id, missionId: row.id, title: `Nouvelle mission pour ${agent.name}`, detail: input.title })
+    this.journal.activity({ type: 'mission.created', agentId: agent.id, missionId: row.id, title: input.depth ? `${agent.name} reçoit une sous-mission` : `Nouvelle mission pour ${agent.name}`, detail: input.title })
     this.bus.invalidate('missions')
-    if (input.startNow) return this.start(row.id, 'user')
+    if (input.startNow) return this.start(row.id, input.origin ?? 'user')
     return this.get(row.id)
+  }
+
+  /** Resolves when the mission's current execution ends (done, failed, cancelled, or waiting on a start approval). */
+  awaitIdle(id: string): Promise<Mission> {
+    if (!this.running.has(id)) return Promise.resolve(this.get(id))
+    return new Promise((resolve) => {
+      const list = this.idleWaiters.get(id) ?? []
+      list.push(() => {
+        try {
+          resolve(this.get(id))
+        } catch {
+          resolve({ ...({} as Mission), id, status: 'cancelled' } as Mission)
+        }
+      })
+      this.idleWaiters.set(id, list)
+    })
+  }
+
+  /** Persists a parsed structured result (constellation sub-missions). */
+  setResultData(id: string, data: StructuredResult | null): void {
+    this.db.update(missions).set({ resultData: data, updatedAt: nowIso() }).where(eq(missions.id, id)).run()
+  }
+
+  /** Back to « à faire » without starting (constellation resume). */
+  reset(id: string): void {
+    const m = this.get(id)
+    if (m.status === 'failed' || m.status === 'cancelled') this.transition(m, 'todo', { error: null, finishedAt: null })
+  }
+
+  /** Marks a never-started mission as skipped (dependency failed, run cancelled). */
+  skip(id: string, reason: string): void {
+    const m = this.get(id)
+    if (m.status !== 'todo' && m.status !== 'approval_required') return
+    this.transition(m, 'cancelled', { finishedAt: nowIso(), error: reason })
+    this.expireApprovals(id)
   }
 
   start(id: string, origin: 'user' | 'automation', followUp?: string): Mission {
@@ -129,7 +229,12 @@ export class MissionManager {
     if (engine && mission.engine !== agent.providerId) {
       throw new OrbitError('conflict', `Cette mission appartient à une session ${engine.name}. Dupliquez-la pour la confier au moteur actuel de ${agent.name}.`)
     }
-    if (engine) this.checkWorkspace(mission.workspace, agent)
+    if (engine && agent.runtime !== 'remote') this.checkWorkspace(mission.workspace, agent)
+    if (agent.isolation === 'strict' && agent.runtime !== 'remote') {
+      // Fail closed: never run « strict » silently in standard mode.
+      if (!engine?.capabilities.confinable) throw new OrbitError('forbidden', `L’isolation renforcée n’est pas disponible pour ${engine?.name ?? 'ce fournisseur'}.`)
+      if (this.security && !this.security.isolationProven()) throw new OrbitError('forbidden', 'Isolation renforcée demandée, mais l’auto-test de confinement a échoué sur ce Mac. Paramètres → Sécurité.')
+    }
 
     const decision = this.permissions.check(agent, 'mission.start', origin, { toolGated: Boolean(engine) })
     if (!decision.allowed) throw new OrbitError('forbidden', decision.reason ?? 'Démarrage refusé.')
@@ -173,13 +278,14 @@ export class MissionManager {
   }
 
   /** Continues an agent mission in the same engine session (resumes after a restart too). */
-  followUp(id: string, prompt: string): Mission {
+  followUp(id: string, prompt: string, origin: 'user' | 'automation' = 'user'): Mission {
     const mission = this.get(id)
-    if (!mission.engine) throw new OrbitError('validation', 'Seules les missions confiées à un moteur agent (Claude Agent SDK, Codex) peuvent être poursuivies.')
+    // Constellation coordinators on a chat provider get their full context in the prompt itself.
+    if (!mission.engine && !mission.constellationRunId) throw new OrbitError('validation', 'Seules les missions confiées à un moteur agent (Claude Code, Claude Agent SDK, Codex) peuvent être poursuivies.')
     if (this.running.has(id)) throw new OrbitError('conflict', 'Le compagnon travaille encore sur cette mission.')
     if (mission.status === 'approval_required') throw new OrbitError('conflict', 'Répondez d’abord à la demande d’approbation en attente.')
     if (mission.status !== 'todo') this.transition(mission, 'todo')
-    return this.start(id, 'user', prompt)
+    return this.start(id, origin, prompt)
   }
 
   cancel(id: string): Mission {
@@ -261,15 +367,34 @@ export class MissionManager {
     const ts = nowIso()
     const open = this.db.select().from(missionExecutions).where(eq(missionExecutions.status, 'running')).all()
     for (const ex of open) {
+      const remote = this.db.select({ r: agents.runtime }).from(missions).innerJoin(agents, eq(agents.id, missions.agentId)).where(eq(missions.id, ex.missionId)).get()?.r === 'remote'
       this.db
         .update(missions)
-        .set({ status: 'failed', error: 'Interrompue : Orbit a été fermé pendant l’exécution. Vous pouvez poursuivre la mission, la session est conservée.', finishedAt: ts, updatedAt: ts })
+        .set({ status: 'failed', error: remote ? REMOTE_PENDING : 'Interrompue : Orbit a été fermé pendant l’exécution. Vous pouvez poursuivre la mission, la session est conservée.', finishedAt: ts, updatedAt: ts })
         .where(and(eq(missions.id, ex.missionId), inArray(missions.status, ['running', 'waiting', 'approval_required'])))
         .run()
       this.db.update(missionExecutions).set({ status: 'failed', error: 'Interrompue', finishedAt: ts }).where(eq(missionExecutions.id, ex.id)).run()
     }
     this.db.update(approvalRequests).set({ status: 'expired', resolvedAt: ts }).where(and(eq(approvalRequests.kind, 'tool_use'), eq(approvalRequests.status, 'pending'))).run()
     this.db.update(toolCalls).set({ status: 'cancelled', finishedAt: ts }).where(inArray(toolCalls.status, ['running', 'awaiting_approval'])).run()
+  }
+
+  /**
+   * A remote mission Orbit lost track of (connection lost, Orbit restarted) finished on its
+   * machine: its real outcome replaces the « waiting for resync » state, once.
+   */
+  applyRemoteOutcome(executionId: string, outcome: { status: string; result: string | null; error: string | null }): void {
+    const ex = this.db.select().from(missionExecutions).where(eq(missionExecutions.id, executionId)).get()
+    if (!ex) return
+    const m = this.db.select().from(missions).where(eq(missions.id, ex.missionId)).get()
+    if (!m || this.running.has(m.id) || !(m.error ?? '').startsWith(REMOTE_PENDING_PREFIX)) return
+    const ts = nowIso()
+    const status = outcome.status === 'done' ? 'done' : outcome.status === 'cancelled' ? 'cancelled' : 'failed'
+    this.db.update(missions).set({ status, result: outcome.result ?? m.result, error: status === 'failed' ? (outcome.error ?? 'Échec sur la machine distante.') : null, updatedAt: ts, finishedAt: ts }).where(eq(missions.id, m.id)).run()
+    this.db.update(missionExecutions).set({ status: status === 'done' ? 'done' : status, error: outcome.error, finishedAt: ts }).where(eq(missionExecutions.id, executionId)).run()
+    this.event(m.id, executionId, status === 'done' ? 'completed' : status === 'cancelled' ? 'cancelled' : 'failed', `Résultat récupéré auprès de la machine distante : ${status === 'done' ? 'mission terminée' : outcome.error ?? status}.`)
+    this.journal.activity({ type: status === 'done' ? 'mission.completed' : 'mission.failed', level: status === 'done' ? 'success' : 'error', agentId: m.agentId, missionId: m.id, title: 'Mission distante synchronisée', detail: m.title })
+    this.bus.invalidate('missions', 'agents')
   }
 
   // Execution engine
@@ -289,7 +414,9 @@ export class MissionManager {
     const controller = new AbortController()
     this.running.set(missionId, controller)
     this.agents.setStatus(agent.id, 'working', mission.title)
-    const engine = mission.engine ? this.providers.engine(mission.engine) : null
+    const engine = mission.engine ? (agent.runtime === 'remote' && this.remoteEngine ? this.remoteEngine(agent) : this.providers.engine(mission.engine)) : null
+    // A delegated mission never gets more than its companion: intersection, never union.
+    const effectivePerms = intersectPermissions(agent.permissions, mission.permissionsOverride)
     if (followUp) this.event(missionId, executionId, 'user', followUp)
     this.event(missionId, executionId, 'started', `${agent.name} ${followUp ? 'reprend' : 'commence'} la mission avec ${adapter.name} · ${agent.model}${mission.workspace ? ` · ${mission.workspace}` : ''}`)
     if (!followUp) this.journal.activity({ type: 'mission.started', agentId: agent.id, missionId, title: `${agent.name} a démarré une mission`, detail: mission.title })
@@ -306,10 +433,13 @@ export class MissionManager {
           engine,
           executionId,
           prompt,
-          instructions: `${agent.instructions}${this.memory.contextFor(agent.id)}\n\n${engineRules(agent, mission.workspace!)}`,
+          instructions: `${agent.instructions}${this.memory.contextFor(agent.id)}\n\n${engineRules({ ...agent, permissions: effectivePerms }, mission.workspace!)}`,
+          permissions: effectivePerms,
+          remote: agent.runtime === 'remote',
           secret: adapter.requiresSecret ? this.providers.secretFor(agent.providerId) : null,
           budgetUsd: engine.capabilities.budgetCap ? this.usage.remainingBudget(agent) : null,
           signal: controller.signal,
+          onSession: (model) => this.providers.noteEngineSession(engine.id, model),
           onWaiting: (waiting) => {
             const fresh = this.get(missionId)
             if (waiting && fresh.status === 'running') this.transition(fresh, 'approval_required')
@@ -340,6 +470,8 @@ export class MissionManager {
       this.agents.setStatus(agent.id, 'available', null)
     } finally {
       this.bus.invalidate('missions', 'agents')
+      for (const w of this.idleWaiters.get(missionId)?.splice(0) ?? []) w()
+      this.idleWaiters.delete(missionId)
     }
   }
 

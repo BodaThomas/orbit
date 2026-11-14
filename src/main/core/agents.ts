@@ -1,9 +1,11 @@
-import { asc, eq, max } from 'drizzle-orm'
-import type { AgentInput } from '@shared/ipc'
-import type { Agent, AgentStatus } from '@shared/types'
+import { asc, eq, inArray, max } from 'drizzle-orm'
+import { ACTIVE_MISSION_STATUSES } from '@shared/mission-states'
+import { companionState, stateContext } from '@shared/stats'
+import { agentInputSchema, type AgentInput, type AgentInputRaw } from '@shared/ipc'
+import type { Agent, AgentStatus, MissionStatus } from '@shared/types'
 import type { OrbitDb } from '../infra/db/client'
 import { toAgent } from '../infra/db/mappers'
-import { agentAppearances, agents } from '../infra/db/schema'
+import { agentAppearances, agents, approvalRequests, missions } from '../infra/db/schema'
 import type { EventBus } from './event-bus'
 import type { Journal } from './journal'
 import { newId, nowIso, OrbitError } from './util'
@@ -22,7 +24,25 @@ export class AgentManager {
       .innerJoin(agentAppearances, eq(agentAppearances.agentId, agents.id))
       .orderBy(asc(agents.sortOrder), asc(agents.createdAt))
       .all()
-    return rows.map((r) => toAgent(r.agents, r.agent_appearances.appearance))
+    const ctx = this.stateContext()
+    return rows.map((r) => this.withSharedStatus(toAgent(r.agents, r.agent_appearances.appearance), ctx))
+  }
+
+  /**
+   * The status every screen shows is derived from missions and approvals by the shared
+   * rules (shared/stats.ts), not from a field an interrupted run could leave stale.
+   */
+  private stateContext() {
+    const active = this.db.select({ agentId: missions.agentId, status: missions.status }).from(missions).where(inArray(missions.status, ACTIVE_MISSION_STATUSES)).all()
+    const pending = this.db.select({ agentId: approvalRequests.agentId, status: approvalRequests.status }).from(approvalRequests).where(eq(approvalRequests.status, 'pending')).all()
+    return stateContext(active.map((m) => ({ agentId: m.agentId, status: m.status as MissionStatus })), pending.map((a) => ({ agentId: a.agentId, status: 'pending' as const })))
+  }
+
+  private withSharedStatus(agent: Agent, ctx: ReturnType<AgentManager['stateContext']>): Agent {
+    const state = companionState(agent, ctx)
+    const status: AgentStatus =
+      state === 'in_mission' ? 'working' : state === 'awaiting_approval' ? 'awaiting_approval' : state === 'error' ? 'error' : state === 'offline' ? (agent.enabled ? 'offline' : 'disabled') : agent.status === 'done' && Date.now() - Date.parse(agent.updatedAt) < 30_000 ? 'done' : 'available'
+    return { ...agent, status, statusText: status === 'available' ? null : agent.statusText }
   }
 
   get(id: string): Agent {
@@ -33,10 +53,11 @@ export class AgentManager {
       .where(eq(agents.id, id))
       .get()
     if (!r) throw new OrbitError('not_found', 'Compagnon introuvable.')
-    return toAgent(r.agents, r.agent_appearances.appearance)
+    return this.withSharedStatus(toAgent(r.agents, r.agent_appearances.appearance), this.stateContext())
   }
 
-  create(input: AgentInput, opts: { silent?: boolean } = {}): Agent {
+  create(raw: AgentInputRaw, opts: { silent?: boolean } = {}): Agent {
+    const input: AgentInput = agentInputSchema.parse(raw)
     const id = newId()
     const ts = nowIso()
     const order = (this.db.select({ m: max(agents.sortOrder) }).from(agents).get()?.m ?? -1) + 1
@@ -54,6 +75,10 @@ export class AgentManager {
           permissions: input.permissions,
           workingDirectory: input.workingDirectory,
           dailyBudgetUsd: input.dailyBudgetUsd,
+          isolation: input.isolation ?? 'standard',
+          effort: input.effort ?? null,
+          runtime: input.runtime ?? 'local',
+          machineId: input.machineId ?? null,
           status: 'available',
           sortOrder: order,
           createdAt: ts,
@@ -107,6 +132,10 @@ export class AgentManager {
       permissions: a.permissions,
       workingDirectory: a.workingDirectory,
       dailyBudgetUsd: a.dailyBudgetUsd,
+      isolation: a.isolation,
+      effort: a.effort as AgentInput['effort'],
+      runtime: a.runtime,
+      machineId: a.machineId,
     })
   }
 
