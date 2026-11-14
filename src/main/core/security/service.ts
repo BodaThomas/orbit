@@ -3,7 +3,7 @@ import type { AutoActionEntry } from '@shared/types'
 import type { OrbitDb } from '../../infra/db/client'
 import { securityAuditEvents } from '../../infra/db/schema'
 import { newId, nowIso } from '../util'
-import { selfTest, seatbeltAvailable, type ConfinementProof } from './seatbelt'
+import { confinementAvailable, selfTest, type ConfinementProof } from './seatbelt'
 
 export interface SecurityAuditEvent {
   id: string
@@ -38,7 +38,7 @@ export class SecurityService {
   }
 
   isolationProven(): boolean {
-    return seatbeltAvailable() && this.getProof().ok
+    return confinementAvailable() && this.getProof().ok
   }
 
   audit(e: Omit<SecurityAuditEvent, 'id' | 'createdAt'>): void {

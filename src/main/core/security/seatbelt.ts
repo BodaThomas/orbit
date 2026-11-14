@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { bwrapAvailable, bwrapConfine } from './bwrap'
 
 /**
  * Level 3 on the host Mac: an Orbit-owned Seatbelt (sandbox-exec) profile wrapped around
@@ -68,8 +69,12 @@ export function buildProfile(spec: ConfinementSpec): string {
   ].join('\n')
 }
 
-/** Wraps a command so it runs confined. */
+/** Seatbelt on macOS, bubblewrap on Linux. */
+export const confinementAvailable = (): boolean => seatbeltAvailable() || bwrapAvailable()
+
+/** Wraps a command so it runs confined (Seatbelt on macOS, bubblewrap on Linux). */
 export function confine(command: string, args: string[], spec: ConfinementSpec): { command: string; args: string[] } {
+  if (process.platform === 'linux') return bwrapConfine(command, args, spec)
   return { command: SANDBOX_EXEC, args: ['-p', buildProfile(spec), command, ...args] }
 }
 
