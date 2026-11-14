@@ -74,13 +74,20 @@ export class Journal {
     return this.db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(limit).all().map(toAudit)
   }
 
-  notify(kind: OrbitNotification['kind'], title: string, body: string, route: string | null = null): void {
-    this.db
+  /**
+   * `dedupeKey`: one notification per fact (a remote event replayed after a reconnection,
+   * a state seen twice). Returns false when it was already notified.
+   */
+  notify(kind: OrbitNotification['kind'], title: string, body: string, route: string | null = null, dedupeKey: string | null = null, opts: { native?: boolean } = {}): boolean {
+    const res = this.db
       .insert(notifications)
-      .values({ id: newId(), kind, title, body, route, read: false, createdAt: nowIso() })
+      .values({ id: newId(), kind, title, body, route, read: false, createdAt: nowIso(), dedupeKey })
+      .onConflictDoNothing()
       .run()
+    if (!res.changes) return false
     this.bus.invalidate('notifications')
-    if (this.getNativeEnabled()) this.platform.nativeNotify(title, body, route)
+    if (opts.native !== false && this.getNativeEnabled()) this.platform.nativeNotify(title, body, route)
+    return true
   }
 
   listNotifications(): OrbitNotification[] {
