@@ -3,12 +3,12 @@ import { forwardRef } from 'react'
 import { cn } from '@/lib/cn'
 
 const button = cva(
-  'inline-flex select-none items-center justify-center gap-1.5 whitespace-nowrap font-medium transition-[background,color,box-shadow,opacity] duration-150 disabled:pointer-events-none disabled:opacity-40 [&_svg]:shrink-0',
+  'inline-flex select-none items-center justify-center gap-1.5 whitespace-nowrap font-medium transition-[background,color,box-shadow,opacity,transform] duration-150 active:translate-y-px disabled:pointer-events-none disabled:opacity-40 [&_svg]:shrink-0',
   {
     variants: {
       variant: {
-        primary: 'bg-accent text-[#14112b] hover:bg-[#b3aafc] active:bg-[#9a8ff5] shadow-[inset_0_1px_0_rgb(255_255_255/0.35)]',
-        secondary: 'bg-elevated text-fg hover:bg-hover shadow-[inset_0_0_0_1px_var(--color-line)]',
+        primary: 'bg-accent text-[#14112b] hover:bg-[#b3aafc] active:bg-[#9a8ff5] shadow-[inset_0_1px_0_rgb(255_255_255/0.4),0_0_0_1px_rgb(165_155_250/0.5),0_6px_16px_-8px_rgb(165_155_250/0.6)]',
+        secondary: 'bg-white/[0.055] text-fg hover:bg-white/[0.09] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07),inset_0_1px_0_rgb(255_255_255/0.05)]',
         ghost: 'text-fg-2 hover:bg-white/[0.05] hover:text-fg',
         outline: 'text-fg shadow-[inset_0_0_0_1px_var(--color-line-strong)] hover:bg-white/[0.04]',
         danger: 'bg-danger/12 text-danger hover:bg-danger/20 shadow-[inset_0_0_0_1px_rgb(239_128_138/0.2)]',
