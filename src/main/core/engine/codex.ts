@@ -324,14 +324,30 @@ export function createCodexEngine(opts: CodexEngineOptions): AgentEngine {
       }
 
       const ask = async (itemId: string, tool: ToolStart, extra: { command?: string; cwd?: string; paths?: string[]; diff?: string; reason?: string | null }) => {
-        const verdict = evaluateTool(policy, { kind: tool.kind === 'read' || tool.kind === 'search' ? 'command' : tool.kind, name: tool.name, paths: extra.paths ?? [], command: extra.command })
+        const verdict = evaluateTool(policy, { kind: tool.kind === 'read' || tool.kind === 'search' ? 'command' : tool.kind, name: tool.name, paths: extra.paths ?? [], command: extra.command ? unwrapShell(extra.command) : undefined })
         if (verdict.decision === 'deny') return false
-        if (verdict.decision === 'allow') return true
+        // Codex has no classifier of its own to defer to: the fallback decision applies.
+        if (verdict.decision === 'allow') {
+          if (verdict.routine) io.autoAllowed?.({ tool, via: 'policy', rule: verdict.rule, category: verdict.category, reason: verdict.reason })
+          return true
+        }
         return io.requestApproval({
           externalId: itemId,
           tool,
           summary: tool.title,
-          payload: { tool: tool.name, kind: tool.kind, command: extra.command, cwd: extra.cwd, paths: extra.paths, diff: extra.diff, reason: extra.reason ?? verdict.reason, engine: 'codex' },
+          payload: {
+            tool: tool.name,
+            kind: tool.kind,
+            command: extra.command,
+            cwd: extra.cwd ?? ws,
+            paths: extra.paths,
+            diff: extra.diff,
+            reason: extra.reason ? `${verdict.reason} · Codex : ${extra.reason}` : verdict.reason,
+            engine: 'codex',
+            category: verdict.category,
+            rule: verdict.rule,
+            grant: verdict.grant,
+          },
         })
       }
 

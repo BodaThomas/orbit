@@ -6,7 +6,8 @@ import { spawn } from 'node:child_process'
 import type { CanUseTool, HookCallback, Options, PermissionResult, Query, SDKMessage, SpawnedProcess, SpawnOptions } from '@anthropic-ai/claude-agent-sdk'
 import { confine, engineConfinement } from '../security/seatbelt'
 import type { ToolKind } from '@shared/types'
-import { evaluateTool, type ToolAction } from './policy'
+import { createClaudeGate } from './gate'
+import type { ToolAction } from './policy'
 import { EngineError, type AgentEngine, type EngineIO, type EngineRunRequest, type EngineRunResult, type RunPolicy, type ToolStart, type UsageReport } from './types'
 
 type QueryFn = (params: { prompt: string; options?: Options }) => Query
@@ -40,7 +41,7 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v 
 export function describeClaudeTool(name: string, rawInput: unknown, workspace: string): { action: ToolAction; title: string } {
   const input = (rawInput ?? {}) as Record<string, unknown>
   const short = (p: string) => (p.startsWith(workspace) ? p.slice(workspace.length).replace(/^\//, '') || '.' : p)
-  const act = (kind: ToolKind, paths: string[], title: string, command?: string) => ({ action: { kind, name, paths, command }, title })
+  const act = (kind: ToolKind, paths: string[], title: string, command?: string, target?: string) => ({ action: { kind, name, paths, command, target }, title })
   switch (name) {
     case 'Read': {
       const f = str(input.file_path) ?? ''
@@ -64,13 +65,13 @@ export function describeClaudeTool(name: string, rawInput: unknown, workspace: s
       return act('command', [], cmd.length > 80 ? `${cmd.slice(0, 80)}…` : cmd, cmd)
     }
     case 'WebFetch':
-      return act('web', [], `Consulte ${str(input.url) ?? 'une page web'}`)
+      return act('web', [], `Consulte ${str(input.url) ?? 'une page web'}`, undefined, str(input.url))
     case 'WebSearch':
       return act('web', [], `Recherche web « ${str(input.query) ?? ''} »`)
     case 'TodoWrite':
       return act('plan', [], 'Met à jour son plan')
     default:
-      return act(name.startsWith('mcp__') ? 'mcp' : 'other', [], name)
+      return act(name.startsWith('mcp__') ? 'mcp' : 'other', [], name, undefined, name)
   }
 }
 
@@ -111,7 +112,8 @@ export function createClaudeAgentEngine(opts: ClaudeEngineOptions): AgentEngine 
   return {
     id: 'claude-agent',
     name: 'Claude Agent SDK',
-    capabilities: { resume: true, approvals: true, interrupt: true, fileDiffs: false, budgetCap: true, usage: 'official', confinable: true, effort: true },
+    // Bash runs in Claude Code's Seatbelt sandbox, writes limited to the workspace and tmp.
+    capabilities: { resume: true, approvals: true, interrupt: true, fileDiffs: false, budgetCap: true, usage: 'official', confinable: true, effort: true, containsCommands: process.platform === 'darwin' },
 
     async checkReady(secret) {
       if (!secret) return { ready: false, detail: 'Connectez d’abord Anthropic (clé API Console) : le moteur l’utilise.', auth: 'none' }
@@ -144,48 +146,24 @@ export function createClaudeAgentEngine(opts: ClaudeEngineOptions): AgentEngine 
         return tool
       }
 
-      /** Single gate used by both the PreToolUse hook and canUseTool. */
-      const gate = async (toolUseId: string, name: string, input: Record<string, unknown>): Promise<{ allow: boolean; reason: string }> => {
-        const { action } = describeClaudeTool(name, input, policy.workspace)
-        const verdict = evaluateTool(policy, action)
-        const tool = startTool(toolUseId, name, input)
-        if (verdict.decision === 'allow') return { allow: true, reason: verdict.reason }
-        if (verdict.decision === 'deny') {
-          io.emit({ type: 'tool.completed', tool: { externalId: toolUseId, status: 'denied', output: verdict.reason } })
-          return { allow: false, reason: `Refusé par Orbit : ${verdict.reason}` }
-        }
-        const approved = await io.requestApproval({
-          externalId: toolUseId,
-          tool,
-          summary: tool.title,
-          payload: {
-            tool: name,
-            kind: action.kind,
-            command: action.command,
-            paths: action.paths.filter(Boolean),
-            diff: name === 'Edit' ? `- ${str(input.old_string) ?? ''}\n+ ${str(input.new_string) ?? ''}` : name === 'Write' ? str(input.content)?.slice(0, 4000) : undefined,
-            reason: verdict.reason,
-            cwd: policy.workspace,
-            engine: 'claude-agent',
-          },
-        })
-        if (!approved) {
-          io.emit({ type: 'tool.completed', tool: { externalId: toolUseId, status: 'denied', output: 'Refusé par l’utilisateur.' } })
-          return { allow: false, reason: 'L’utilisateur a refusé cette action dans Orbit. Ne la retente pas ; propose une alternative ou termine.' }
-        }
-        return { allow: true, reason: 'Approuvé par l’utilisateur.' }
-      }
+      // Automated companions use Claude's native auto mode for what Orbit leaves open;
+      // the mode really in force is read back from the session's init message.
+      const requestedMode: Options['permissionMode'] = policy.autonomy === 'automated' ? 'auto' : 'default'
+      let autoActive = false
+      const gate = createClaudeGate({ policy, io, engine: 'claude-agent', startTool, autoModeActive: () => autoActive })
 
       const preToolUse: HookCallback = async (input, toolUseId) => {
         if (input.hook_event_name !== 'PreToolUse') return {}
         const id = toolUseId ?? input.tool_use_id
-        const res = await gate(id, input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>)
-        return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: res.allow ? 'allow' : 'deny', permissionDecisionReason: res.reason } }
+        const res = await gate.preToolUse(id, input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>)
+        // `defer`: no decision here, the session's permission mode (auto classifier) decides.
+        if (res.decision === 'defer') return {}
+        return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: res.decision, permissionDecisionReason: res.reason } }
       }
-      // Fallback path if Claude Code still asks: same gate, same answer.
+      // Fallback path if Claude Code still asks: same gate, same (cached) answer.
       const canUseTool: CanUseTool = async (name, input, o): Promise<PermissionResult> => {
         const id = o.toolUseID ?? `perm-${name}-${Date.now()}`
-        const res = await gate(id, name, input)
+        const res = await gate.permission(id, name, input, o.decisionReason)
         return res.allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: res.reason }
       }
 
@@ -214,14 +192,16 @@ export function createClaudeAgentEngine(opts: ClaudeEngineOptions): AgentEngine 
         // Only the tools this companion may use exist in the session at all.
         tools: allowedClaudeTools(policy),
         allowedTools: [],
-        permissionMode: 'default',
+        // Never bypassPermissions: `default` (every open decision comes back to Orbit) or `auto`.
+        permissionMode: requestedMode,
         // Isolation: no user/project settings (they could pre-allow tools or add hooks).
         settingSources: [],
         canUseTool,
         hooks: { PreToolUse: [{ hooks: [preToolUse], timeout: 86_400, onFailure: 'block' }] },
         sandbox: {
           enabled: true,
-          failIfUnavailable: false,
+          // When Orbit counts on the sandbox to auto-approve routine commands, no sandbox = no run.
+          failIfUnavailable: policy.commandsContained === true,
           autoAllowBashIfSandboxed: false,
           allowUnsandboxedCommands: false,
           filesystem: { allowWrite: policy.permissions.writeFiles ? [policy.workspace, tmpdir()] : [tmpdir()] },
@@ -280,6 +260,8 @@ export function createClaudeAgentEngine(opts: ClaudeEngineOptions): AgentEngine 
           case 'system':
             if (msg.subtype === 'init') {
               sessionId = msg.session_id
+              autoActive = msg.permissionMode === 'auto'
+              if (msg.permissionMode !== requestedMode) io.emit({ type: 'warning', message: permissionModeWarning(requestedMode, msg.permissionMode) })
               io.emit({ type: 'session', sessionId: msg.session_id, model: msg.model })
               io.emit({ type: 'status', phase: 'thinking', label: 'Réfléchit' })
             }
@@ -317,6 +299,7 @@ export function createClaudeAgentEngine(opts: ClaudeEngineOptions): AgentEngine 
               if (typeof block !== 'object' || block.type !== 'tool_result') continue
               const tool = started.get(block.tool_use_id)
               const text = toolResultText(block.content).slice(0, MAX_OUTPUT)
+              gate.settled(block.tool_use_id, !block.is_error)
               io.emit({ type: 'tool.completed', tool: { externalId: block.tool_use_id, status: block.is_error ? 'failed' : 'completed', output: text } })
               if (tool && !block.is_error) {
                 const path = changedPathFor(tool.name, (tool.input ?? {}) as Record<string, unknown>)
@@ -352,6 +335,12 @@ export function createClaudeAgentEngine(opts: ClaudeEngineOptions): AgentEngine 
       }
     },
   }
+}
+
+/** What Orbit tells the user when the engine does not run in the permission mode it asked for. */
+export function permissionModeWarning(requested: string | undefined, actual: string | undefined): string {
+  if (requested === 'auto') return `Mode auto de Claude indisponible pour ce compte (mode ${actual ?? 'inconnu'}) : les commandes qu’Orbit ne sait pas classer vous seront soumises.`
+  return `Claude a démarré en mode « ${actual ?? 'inconnu'} » au lieu de « ${requested} » : chaque action reste décidée par la politique d’Orbit (hook PreToolUse).`
 }
 
 /** Short label for a path in the UI. */

@@ -27,6 +27,11 @@ export interface EngineCapabilities {
   confinable: boolean
   /** The engine lets the caller pick a reasoning effort. */
   effort: boolean
+  /**
+   * Approved commands run in an OS sandbox Orbit configures (writes limited to the workspace
+   * and temp folder, startup fails if the sandbox is unavailable). Drives `commandsContained`.
+   */
+  containsCommands?: boolean
 }
 
 export interface EngineReadiness {
@@ -46,6 +51,14 @@ export interface RunPolicy {
   autonomy: AutonomyLevel
   /** `strict`: the engine process tree runs under Orbit's Seatbelt profile (proven by self-test). */
   isolation: IsolationMode
+  /**
+   * The engine runs every approved command in an OS sandbox that limits writes to the
+   * workspace and the temp folder (and fails rather than run unsandboxed). Set by Orbit
+   * from what it configures itself, never assumed: absent → false.
+   */
+  commandsContained?: boolean
+  /** Folders no tool may read or write: Orbit's data (database, grants), engine config. */
+  protectedPaths?: string[]
 }
 
 export interface EngineRunRequest {
@@ -116,10 +129,25 @@ export interface ApprovalAsk {
   summary: string
 }
 
+/** An action that ran without asking anyone: shown as a non-blocking notice and kept in the log. */
+export interface AutoDecision {
+  tool: ToolStart
+  /** `policy`: Orbit's routine rules · `engine`: left to the engine's own classifier (Claude auto mode). */
+  via: 'policy' | 'engine'
+  rule: string
+  category: string
+  reason: string
+}
+
 export interface EngineIO {
   emit(event: EngineEvent): void
-  /** Resolves true when the human approves. Resolves false on refusal, cancellation or shutdown. */
+  /**
+   * Resolves true when the action may run: a persistent authorisation matched, or the human
+   * approved. Resolves false on refusal, cancellation or shutdown.
+   */
   requestApproval(ask: ApprovalAsk): Promise<boolean>
+  /** Optional: reports an action allowed without confirmation (routine). */
+  autoAllowed?(d: AutoDecision): void
 }
 
 export type EngineErrorKind = 'auth' | 'network' | 'rate_limit' | 'budget' | 'engine_missing' | 'protocol' | 'refusal' | 'cancelled' | 'unknown'

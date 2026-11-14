@@ -1,12 +1,12 @@
 import { execFile } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { promisify } from 'node:util'
 import type { RateLimitSnapshot, RateLimitWindow } from '@shared/types'
 import { engineConfinement } from '../security/seatbelt'
-import { allowedClaudeTools, changedPathFor, describeClaudeTool } from './claude-agent'
-import { evaluateTool } from './policy'
+import { allowedClaudeTools, changedPathFor, describeClaudeTool, permissionModeWarning } from './claude-agent'
+import { createClaudeGate } from './gate'
 import { spawnLineProcess, type LineProcess, type LineProcessOptions } from './process'
 import { EngineError, type AgentEngine, type EngineIO, type EngineReadiness, type EngineRunRequest, type EngineRunResult, type ToolStart, type UsageReport } from './types'
 
@@ -20,11 +20,19 @@ const run = promisify(execFile)
  *
  *   claude -p --input-format stream-json --output-format stream-json --verbose
  *          --permission-prompt-tool stdio --restricted --strict-mcp-config --tools …
+ *          --permission-mode default|auto --settings '{"sandbox":{…}}'
  *
  * - `--restricted`: user/project/local settings are ignored (they could pre-allow tools),
  *   file tools are confined to the working directory, bypassPermissions is refused.
- * - Every permission prompt arrives as a `can_use_tool` control request and is answered
- *   by Orbit's policy, or by the user in Orbit. `--dangerously-skip-permissions` is never used.
+ * - Orbit registers a PreToolUse hook in the `initialize` request: *every* tool call is
+ *   decided by Orbit's policy before it runs, including those the CLI would otherwise allow
+ *   by itself. Remaining permission prompts arrive as `can_use_tool` control requests and
+ *   are answered by the same gate (same answer, never a second question).
+ * - The permission mode is always explicit (`claude -p` would otherwise pick `auto` where
+ *   available) and checked against the session's init message. `--dangerously-skip-permissions`
+ *   and `bypassPermissions` are never used.
+ * - Bash runs in Claude Code's own sandbox (`--settings`, honoured under `--restricted`):
+ *   writes limited to the workspace and the temp folder, no unsandboxed fallback.
  * - Quotas come only from the CLI's own `rate_limit_event` messages.
  *
  * Usage terms (code.claude.com/docs/en/legal-and-compliance): signing in to the
@@ -127,6 +135,27 @@ export interface ClaudeCodeEngineOptions {
   findBinary?: () => string | null
 }
 
+/** Callback id of Orbit's PreToolUse hook, registered in the `initialize` request. */
+export const ORBIT_HOOK_ID = 'orbit_pretooluse'
+
+export function claudePermissionMode(req: EngineRunRequest): 'auto' | 'default' {
+  return req.policy.autonomy === 'automated' ? 'auto' : 'default'
+}
+
+/** Same command sandbox as the Agent SDK adapter, passed as flag settings. */
+export function claudeSandboxSettings(req: EngineRunRequest): Record<string, unknown> {
+  const p = req.policy
+  return {
+    sandbox: {
+      enabled: true,
+      failIfUnavailable: p.commandsContained === true,
+      autoAllowBashIfSandboxed: false,
+      allowUnsandboxedCommands: false,
+      filesystem: { allowWrite: p.permissions.writeFiles ? [p.workspace, tmpdir()] : [tmpdir()] },
+    },
+  }
+}
+
 export function buildClaudeCodeArgs(req: EngineRunRequest): string[] {
   const tools = allowedClaudeTools(req.policy)
   const args = [
@@ -142,6 +171,8 @@ export function buildClaudeCodeArgs(req: EngineRunRequest): string[] {
     '--restricted',
     '--strict-mcp-config',
     '--tools', tools.join(','),
+    '--permission-mode', claudePermissionMode(req),
+    '--settings', JSON.stringify(claudeSandboxSettings(req)),
     '--append-system-prompt', req.instructions,
   ]
   if (req.model) args.push('--model', req.model)
@@ -159,7 +190,7 @@ export function createClaudeCodeEngine(opts: ClaudeCodeEngineOptions = {}): Agen
   return {
     id: 'claude-code',
     name: 'Claude Code',
-    capabilities: { resume: true, approvals: true, interrupt: true, fileDiffs: false, budgetCap: false, usage: 'official', confinable: true, effort: true },
+    capabilities: { resume: true, approvals: true, interrupt: true, fileDiffs: false, budgetCap: false, usage: 'official', confinable: true, effort: true, containsCommands: process.platform === 'darwin' },
 
     async checkReady() {
       const bin = findBin()
@@ -242,44 +273,33 @@ export function createClaudeCodeEngine(opts: ClaudeCodeEngineOptions = {}): Agen
         return tool
       }
 
+      const requestedMode = claudePermissionMode(req)
+      let autoActive = false
+      const gate = createClaudeGate({ policy, io, engine: 'claude-code', startTool, autoModeActive: () => autoActive })
+      const reply = (requestId: string, response: unknown) => {
+        if (!finished) send({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } })
+      }
+
+      /** PreToolUse hook callback: Orbit decides before the CLI applies its own rules. */
+      const answerHook = async (requestId: string, r: Record<string, unknown>) => {
+        const input = (r.input ?? {}) as Record<string, unknown>
+        if (r.callback_id !== ORBIT_HOOK_ID || input.hook_event_name !== 'PreToolUse') {
+          send({ type: 'control_response', response: { subtype: 'error', request_id: requestId, error: 'Hook inconnu d’Orbit : refusé.' } })
+          return
+        }
+        const toolUseId = String(r.tool_use_id ?? input.tool_use_id ?? `hook-${requestId}`)
+        const res = await gate.preToolUse(toolUseId, String(input.tool_name ?? ''), (input.tool_input ?? {}) as Record<string, unknown>)
+        reply(requestId, res.decision === 'defer' ? {} : { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: res.decision, permissionDecisionReason: res.reason } })
+      }
+
       /** Orbit's answer to a permission prompt. Fail closed on anything unexpected. */
       const answerPermission = async (requestId: string, r: Record<string, unknown>) => {
         const name = String(r.tool_name ?? '')
         const input = (r.input ?? {}) as Record<string, unknown>
         const toolUseId = String(r.tool_use_id ?? `perm-${requestId}`)
-        const { action } = describeClaudeTool(name, input, policy.workspace)
-        const verdict = evaluateTool(policy, action)
-        const tool = startTool(toolUseId, name, input)
-        let allow = false
-        let message = ''
-        if (verdict.decision === 'allow') allow = true
-        else if (verdict.decision === 'deny') {
-          message = `Refusé par Orbit : ${verdict.reason}`
-          io.emit({ type: 'tool.completed', tool: { externalId: toolUseId, status: 'denied', output: verdict.reason } })
-        } else {
-          allow = await io.requestApproval({
-            externalId: toolUseId,
-            tool,
-            summary: tool.title,
-            payload: {
-              tool: name,
-              kind: action.kind,
-              command: action.command,
-              paths: action.paths.filter(Boolean),
-              diff: name === 'Edit' ? `- ${String(input.old_string ?? '')}\n+ ${String(input.new_string ?? '')}` : name === 'Write' ? String(input.content ?? '').slice(0, 4000) : undefined,
-              reason: typeof r.decision_reason === 'string' ? `${verdict.reason} · Claude Code : ${r.decision_reason}` : verdict.reason,
-              cwd: policy.workspace,
-              engine: 'claude-code',
-            },
-          })
-          if (!allow) {
-            message = 'L’utilisateur a refusé cette action dans Orbit. Ne la retente pas ; propose une alternative ou termine.'
-            io.emit({ type: 'tool.completed', tool: { externalId: toolUseId, status: 'denied', output: 'Refusé par l’utilisateur.' } })
-          }
-        }
-        if (finished) return
-        // Never send updatedPermissions: a decision is valid for this single call only.
-        send({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response: allow ? { behavior: 'allow', updatedInput: input, toolUseID: toolUseId } : { behavior: 'deny', message, toolUseID: toolUseId } } })
+        const res = await gate.permission(toolUseId, name, input, typeof r.decision_reason === 'string' ? r.decision_reason : undefined)
+        // Never send updatedPermissions: persistent authorisations live in Orbit, revocable there.
+        reply(requestId, res.allow ? { behavior: 'allow', updatedInput: input, toolUseID: toolUseId } : { behavior: 'deny', message: res.reason, toolUseID: toolUseId })
       }
 
       const flushText = () => {
@@ -296,7 +316,8 @@ export function createClaudeCodeEngine(opts: ClaudeCodeEngineOptions = {}): Agen
             const r = (m.request ?? {}) as Record<string, unknown>
             const id = String(m.request_id)
             if (r.subtype === 'can_use_tool') void answerPermission(id, r)
-            // Hooks, elicitations, dialogs…: not supported → refused.
+            else if (r.subtype === 'hook_callback') void answerHook(id, r)
+            // Elicitations, dialogs…: not supported → refused.
             else send({ type: 'control_response', response: { subtype: 'error', request_id: id, error: 'Non pris en charge par Orbit : refusé.' } })
             return
           }
@@ -306,6 +327,8 @@ export function createClaudeCodeEngine(opts: ClaudeCodeEngineOptions = {}): Agen
           case 'system':
             if (m.subtype === 'init') {
               sessionId = String(m.session_id)
+              autoActive = m.permissionMode === 'auto'
+              if (typeof m.permissionMode === 'string' && m.permissionMode !== requestedMode) io.emit({ type: 'warning', message: permissionModeWarning(requestedMode, m.permissionMode) })
               // apiKeySource « none » = the CLI runs on the user's Claude login (subscription).
               if (typeof m.apiKeySource === 'string') subscription = m.apiKeySource === 'none' && lastAuth !== 'api_key'
               io.emit({ type: 'session', sessionId, model: typeof m.model === 'string' ? m.model : null })
@@ -349,6 +372,7 @@ export function createClaudeCodeEngine(opts: ClaudeCodeEngineOptions = {}): Agen
               const tool = started.get(id)
               const raw = block.content
               const text = (typeof raw === 'string' ? raw : Array.isArray(raw) ? raw.map((c) => (c && typeof c === 'object' && 'text' in c ? String((c as { text: unknown }).text) : '')).join('\n') : '').slice(0, MAX_OUTPUT)
+              gate.settled(id, !block.is_error)
               io.emit({ type: 'tool.completed', tool: { externalId: id, status: block.is_error ? 'failed' : 'completed', output: text } })
               if (tool && !block.is_error) {
                 const path = changedPathFor(tool.name, (tool.input ?? {}) as Record<string, unknown>)
@@ -416,7 +440,8 @@ export function createClaudeCodeEngine(opts: ClaudeCodeEngineOptions = {}): Agen
       if (req.signal.aborted) onAbort()
       req.signal.addEventListener('abort', onAbort)
 
-      send({ type: 'control_request', request_id: `orbit-init-${++reqSeq}`, request: { subtype: 'initialize' } })
+      // Orbit's PreToolUse hook: every tool call is decided by Orbit, whatever the CLI's own rules.
+      send({ type: 'control_request', request_id: `orbit-init-${++reqSeq}`, request: { subtype: 'initialize', hooks: { PreToolUse: [{ hookCallbackIds: [ORBIT_HOOK_ID], timeout: 86_400, onFailure: 'block' }] } } })
       send({ type: 'user', message: { role: 'user', content: req.prompt }, parent_tool_use_id: null, session_id: sessionId ?? '' })
       io.emit({ type: 'status', phase: 'thinking', label: 'Démarre Claude Code' })
 
