@@ -79,6 +79,8 @@ export class OrbitRuntime {
     this.conversations = new ConversationManager(db, bus, this.journal, this.agents, this.providers, this.usage, this.permissions, this.memory)
     this.security = new SecurityService(db)
     this.runner = new AgentRunner(db, bus, this.journal, this.agents, this.usage, this.security)
+    // Orbit's data (database with grants and audit, engine config): out of reach of every tool.
+    if (dbFile !== ':memory:') this.runner.protectedPaths = [dataDir]
     this.missions = new MissionManager(db, bus, this.journal, this.agents, this.providers, this.usage, this.permissions, this.memory, this.runner, this.security)
     this.health = new HealthMonitor(db, bus, this.journal, platform.fetch)
     this.machines = new MachineRegistry(db)

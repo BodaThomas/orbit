@@ -73,7 +73,17 @@ export const handlers: Handlers = {
   'missions.delete': (i, h) => h.runtime().missions.delete(i.id),
 
   'approvals.list': (i, h) => h.runtime().missions.approvals(i.status),
-  'approvals.resolve': (i, h) => h.runtime().missions.resolveApproval(i.id, i.approve),
+  'approvals.resolve': (i, h) => h.runtime().missions.resolveApproval(i.id, i.approve, i.scope),
+  'permissions.grants': (i, h) => h.runtime().runner.grants.list({ agentId: i.agentId, includeRevoked: i.includeRevoked }),
+  'permissions.revoke': (i, h) => {
+    const rt = h.runtime()
+    const g = rt.runner.grants.revoke(i.id)
+    rt.journal.audit({ actor: 'user', agentId: g.agentId, action: 'grant.revoke', target: g.label, allowed: true, reason: null })
+    rt.security.audit({ agentId: g.agentId, missionId: g.missionId, layer: 'grant', action: 'grant.revoke', target: g.label, decision: 'deny', reason: 'Autorisation révoquée par vous' })
+    rt.bus.invalidate('security')
+    return g
+  },
+  'permissions.autoLog': (i, h) => h.runtime().security.autoLog({ agentId: i.agentId, limit: i.limit }),
 
   'activity.list': (i, h) => h.runtime().journal.listActivity(i),
   'usage.summary': (_i, h) => h.runtime().usage.summary(),

@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs'
 import { and, asc, count, desc, eq, inArray } from 'drizzle-orm'
 import { canTransition, MISSION_STATUS_LABELS } from '@shared/mission-states'
-import type { Agent, AgentPermissions, ApprovalRequest, ExecutionEvent, Mission, MissionDetail, MissionPriority, MissionStatus, RecentFileChange, StructuredResult, SubtaskSpec } from '@shared/types'
+import type { Agent, AgentPermissions, ApprovalRequest, ExecutionEvent, GrantScope, Mission, MissionDetail, MissionPriority, MissionStatus, RecentFileChange, StructuredResult, SubtaskSpec } from '@shared/types'
 import type { OrbitDb } from '../infra/db/client'
 import { toApproval, toExecution, toExecutionEvent, toFileChange, toInventory, toMission, toToolCall } from '../infra/db/mappers'
 import { agents, approvalRequests, executionEvents, fileChanges, fileInventories, missionExecutions, missions, toolCalls } from '../infra/db/schema'
@@ -321,10 +321,16 @@ export class MissionManager {
     this.runner.denyAllFor(id)
     this.running.get(id)?.abort()
     this.db.delete(missions).where(eq(missions.id, id)).run()
+    this.runner.grants.expireMission(id)
     this.bus.invalidate('missions', 'approvals')
   }
 
-  resolveApproval(id: string, approve: boolean): ApprovalRequest {
+  /**
+   * The user's answer. `scope` widens a « yes » into a persistent authorisation for this exact
+   * operation (« for this mission » / « always for this companion and folder »), within the
+   * limit the policy offered when it asked. Only reachable from the UI, never from an engine.
+   */
+  resolveApproval(id: string, approve: boolean, scope: GrantScope = 'once'): ApprovalRequest {
     const row = this.db.select().from(approvalRequests).where(eq(approvalRequests.id, id)).get()
     if (!row) throw new OrbitError('not_found', 'Demande introuvable.')
     if (row.status !== 'pending') throw new OrbitError('conflict', 'Cette demande a déjà été traitée.')
@@ -333,11 +339,29 @@ export class MissionManager {
       this.bus.invalidate('approvals')
       throw new OrbitError('conflict', 'Cette demande a expiré : l’exécution qui l’attendait est terminée.')
     }
+    // Validated before anything is resolved: a refused widening leaves the question open.
+    const grant = approve && row.kind === 'tool_use' && scope !== 'once' ? this.runner.grants.grantFromApproval({ agentId: row.agentId, missionId: row.missionId, payload: row.payload, scope }) : null
     this.db.update(approvalRequests).set({ status: approve ? 'approved' : 'denied', resolvedAt: nowIso() }).where(eq(approvalRequests.id, id)).run()
     this.journal.audit({ actor: 'user', agentId: row.agentId, action: `approval.${approve ? 'approve' : 'deny'}`, target: row.missionId, allowed: approve, reason: row.summary })
+    if (grant) {
+      this.journal.audit({ actor: 'user', agentId: row.agentId, action: `grant.${grant.scope}`, target: grant.label, allowed: true, reason: grant.workspace })
+      this.security?.audit({ agentId: row.agentId, missionId: row.missionId, layer: 'grant', action: `grant.${grant.scope}`, target: grant.label, decision: 'approved', reason: grant.scope === 'always' ? 'Toujours, pour ce compagnon et ce dossier' : 'Pour cette mission' })
+      this.bus.invalidate('security')
+    }
     this.journal.activity({ type: 'approval.resolved', level: approve ? 'success' : 'info', agentId: row.agentId, missionId: row.missionId, title: approve ? 'Demande approuvée' : 'Demande refusée', detail: row.summary })
     if (row.kind === 'tool_use') {
       this.runner.resolveApproval(id, approve)
+      // Same exact operation already waiting elsewhere: the new rule answers it too.
+      if (grant) {
+        const others = this.db.select().from(approvalRequests).where(and(eq(approvalRequests.agentId, row.agentId), eq(approvalRequests.status, 'pending'), eq(approvalRequests.kind, 'tool_use'))).all()
+        for (const o of others) {
+          const ows = o.payload?.grant?.workspace ?? o.payload?.cwd
+          if (o.payload?.grant?.key !== grant.operationKey || !ows || this.runner.grants.find({ agentId: o.agentId, workspace: ows, missionId: o.missionId, key: grant.operationKey })?.id !== grant.id) continue
+          if (!this.runner.hasPendingApproval(o.id)) continue
+          this.db.update(approvalRequests).set({ status: 'approved', resolvedAt: nowIso() }).where(eq(approvalRequests.id, o.id)).run()
+          this.runner.resolveApproval(o.id, true)
+        }
+      }
       if (!approve) this.journal.activity({ type: 'tool.denied', agentId: row.agentId, missionId: row.missionId, title: 'Action refusée', detail: row.summary })
     } else if (row.missionId && row.kind === 'mission_start') {
       const mission = this.get(row.missionId)

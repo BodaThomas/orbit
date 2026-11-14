@@ -10,9 +10,12 @@ export function effectivePermissions(agent: Pick<Agent, 'permissions' | 'autonom
   const p = agent.permissions
   const engine = agent.providerId as ProviderId
   const auto = agent.autonomy === 'automated'
+  const manual = agent.autonomy === 'manual'
   const strict = agent.isolation === 'strict' && opts.isolationProven
   const isAgent = engine === 'claude-code' || engine === 'claude-agent' || engine === 'codex'
   const confirm = auto ? 'allowed' : 'ask'
+  // Claude engines run approved commands in their own sandbox (writes confined to the folder).
+  const contained = engine === 'claude-code' || engine === 'claude-agent' || strict
 
   if (!isAgent) {
     const none = (key: EffectivePermissionRow['key'], label: string, companion: boolean): EffectivePermissionRow => ({
@@ -56,14 +59,16 @@ export function effectivePermissions(agent: Pick<Agent, 'permissions' | 'autonom
   rows.push(
     !p.writeFiles
       ? { key: 'write', label: 'Modifier des fichiers', companion: false, effective: 'denied', enforcedBy: engine === 'codex' ? ['sandbox', 'policy'] : ['policy', 'engine'], detail: engine === 'codex' ? 'Bac à sable Codex en lecture seule ; toute écriture est refusée par Orbit.' : 'Les outils d’écriture sont retirés de la session.' }
-      : {
-          key: 'write',
-          label: 'Modifier des fichiers',
-          companion: true,
-          effective: confirm,
-          enforcedBy: auto ? ['policy', 'sandbox'] : ['policy', 'approval', 'sandbox'],
-          detail: auto ? 'Écritures libres dans le dossier autorisé (mode automatique), bloquées ailleurs.' : 'Chaque écriture attend votre accord, avec le diff.',
-        },
+      : manual
+        ? { key: 'write', label: 'Modifier des fichiers', companion: true, effective: 'ask', enforcedBy: ['policy', 'approval', 'sandbox'], detail: 'Mode manuel : chaque écriture attend votre accord, avec le diff. Vous pouvez l’autoriser pour la mission ou toujours, fichier par fichier.' }
+        : {
+            key: 'write',
+            label: 'Modifier des fichiers',
+            companion: true,
+            effective: 'allowed',
+            enforcedBy: ['policy', 'sandbox'],
+            detail: `Sans confirmation dans le dossier autorisé, refusé ailleurs. Toujours sur accord : fichiers sensibles (.env, clés), hooks Git et configuration d’outils (.git, .claude, .vscode, .husky)${contained || auto ? '' : ', et fichiers qui décident de ce qu’exécutent les tests (package.json, Makefile, *.config.ts…) car les commandes de Codex ne sont pas confinées'}.`,
+          },
   )
 
   // Commands
@@ -80,16 +85,38 @@ export function effectivePermissions(agent: Pick<Agent, 'permissions' | 'autonom
           }
         : { key: 'commands', label: 'Exécuter des commandes', companion: false, effective: 'denied', enforcedBy: ['policy', 'engine'], detail: 'L’outil Bash n’existe pas dans la session.' },
     )
+  } else if (manual) {
+    rows.push({ key: 'commands', label: 'Exécuter des commandes', companion: true, effective: 'ask', enforcedBy: ['policy', 'approval', 'sandbox'], detail: 'Mode manuel : chaque commande attend votre accord (autorisable pour la mission ou toujours, commande exacte par commande exacte).' })
   } else {
-    rows.push({ key: 'commands', label: 'Exécuter des commandes', companion: true, effective: confirm, enforcedBy: auto ? ['policy', 'sandbox'] : ['policy', 'approval', 'sandbox'], detail: auto ? 'Commandes libres dans le bac à sable ; les commandes destructrices ou touchant des secrets demandent votre accord.' : 'Chaque commande attend votre accord.' })
+    rows.push({
+      key: 'commands',
+      label: 'Exécuter des commandes',
+      companion: true,
+      effective: auto ? 'allowed' : 'partial',
+      enforcedBy: auto ? ['policy', 'sandbox', 'approval'] : ['policy', 'approval', 'sandbox'],
+      detail: auto
+        ? `Commandes courantes sans confirmation${engine === 'codex' ? ' dans le bac à sable Codex' : ''} ; une commande qu’Orbit ne sait pas classer est confiée au mode auto de Claude quand il est actif. Les actions sensibles vous restent soumises.`
+        : contained
+          ? 'Inspection, tests, vérifications, compilation et Git local sans confirmation, dans le bac à sable du moteur (écritures limitées au dossier). Commandes inconnues et actions sensibles : sur accord.'
+          : 'Inspection (ls, git status, rg…) sans confirmation. Tests et compilation : un premier accord, mémorisable « toujours » — les commandes approuvées de Codex ne sont pas confinées. Actions sensibles : sur accord.',
+    })
   }
 
   // Network
   rows.push(
     !p.network
       ? { key: 'network', label: 'Accès réseau', companion: false, effective: 'denied', enforcedBy: ['policy', 'sandbox'], detail: engine === 'codex' ? 'Réseau coupé dans le bac à sable Codex.' : 'Outils web retirés ; le bac à sable des commandes est sans réseau.' }
-      : { key: 'network', label: 'Accès réseau', companion: true, effective: confirm, enforcedBy: auto ? ['policy'] : ['policy', 'approval'], detail: 'Recherche et pages web, avec votre accord en mode supervisé.' },
+      : { key: 'network', label: 'Accès réseau', companion: true, effective: confirm, enforcedBy: auto ? ['policy'] : ['policy', 'approval'], detail: auto ? 'Recherche et pages web sans confirmation.' : 'Recherche et pages web sur accord, mémorisable par site (« toujours pour ce compagnon »).' },
   )
+
+  rows.push({
+    key: 'sensitive',
+    label: 'Actions sensibles',
+    companion: true,
+    effective: 'ask',
+    enforcedBy: ['policy', 'approval'],
+    detail: 'Toujours sur accord, quel que soit le mode : suppression massive, Git destructif ou distant, installation de dépendances, déploiement, base de données distante, publication, secrets, commandes système. Jamais d’autorisation permanente pour les secrets et les commandes système.',
+  })
 
   rows.push({ key: 'external', label: 'Actions externes', companion: p.externalActions, effective: p.externalActions ? 'ask' : 'denied', enforcedBy: ['policy', 'approval'], detail: 'Outils MCP : toujours soumis à validation, même en mode automatique.' })
 

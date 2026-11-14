@@ -319,6 +319,9 @@ export interface RecentFileChange extends FileChange {
   missionShortId: string
 }
 
+/** How long a « yes » lasts. `once`: this action only. */
+export type GrantScope = 'once' | 'mission' | 'always'
+
 /** What an approval is about, shown to the user before they decide. */
 export interface ApprovalPayload {
   tool: string
@@ -329,6 +332,40 @@ export interface ApprovalPayload {
   diff?: string
   reason?: string
   engine?: ProviderId
+  /** Policy family (verify, install, deploy, edit…) and rule id. */
+  category?: string
+  rule?: string
+  /** Exact operation a persistent authorisation would cover, and the widest scope offered. */
+  grant?: { key: string; label: string; max: GrantScope; /** Companion folder the grant would be bound to (set by Orbit). */ workspace?: string }
+}
+
+/** A persistent « yes » given by the user, limited to one exact operation of one companion in one folder. */
+export interface PermissionGrant {
+  id: string
+  agentId: string
+  workspace: string
+  scope: Exclude<GrantScope, 'once'>
+  missionId: string | null
+  kind: ToolKind
+  operationKey: string
+  label: string
+  category: string | null
+  uses: number
+  lastUsedAt: string | null
+  revokedAt: string | null
+  createdAt: string
+}
+
+/** One action that ran without a confirmation (routine rule, persistent grant or engine classifier). */
+export interface AutoActionEntry {
+  id: string
+  agentId: string | null
+  missionId: string | null
+  via: 'policy' | 'grant' | 'engine'
+  category: string | null
+  title: string
+  reason: string | null
+  createdAt: string
 }
 
 export interface ApprovalRequest {
@@ -602,7 +639,7 @@ export interface FileInventory {
 export type EffectiveLevel = 'allowed' | 'ask' | 'denied' | 'partial'
 
 export interface EffectivePermissionRow {
-  key: 'read' | 'write' | 'commands' | 'network' | 'external' | 'outside' | 'secrets'
+  key: 'read' | 'write' | 'commands' | 'network' | 'external' | 'sensitive' | 'outside' | 'secrets'
   label: string
   /** What the companion settings say. */
   companion: boolean

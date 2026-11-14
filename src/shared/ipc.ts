@@ -32,6 +32,8 @@ import type {
   RemoteMachine,
   AutomationRun,
   RecentFileChange,
+  PermissionGrant,
+  AutoActionEntry,
 } from './types'
 
 // Input schemas
@@ -192,7 +194,10 @@ export const ipcSchemas = {
   'missions.delete': z.object({ id }),
 
   'approvals.list': z.object({ status: z.enum(['pending', 'approved', 'denied', 'expired']).optional() }),
-  'approvals.resolve': z.object({ id, approve: z.boolean() }),
+  'approvals.resolve': z.object({ id, approve: z.boolean(), scope: z.enum(['once', 'mission', 'always']).default('once') }),
+  'permissions.grants': z.object({ agentId: id.optional(), includeRevoked: z.boolean().optional() }),
+  'permissions.revoke': z.object({ id }),
+  'permissions.autoLog': z.object({ agentId: id.optional(), limit: z.number().int().min(1).max(500).optional() }),
 
   'activity.list': z.object({
     limit: z.number().int().min(1).max(500).optional(),
@@ -304,6 +309,9 @@ export interface IpcOutputs {
 
   'approvals.list': ApprovalRequest[]
   'approvals.resolve': ApprovalRequest
+  'permissions.grants': PermissionGrant[]
+  'permissions.revoke': PermissionGrant
+  'permissions.autoLog': AutoActionEntry[]
 
   'activity.list': ActivityEvent[]
   'usage.summary': UsageSummary
@@ -383,6 +391,8 @@ export type OrbitEvent =
   | { type: 'invalidate'; scopes: InvalidateScope[] }
   | { type: 'navigate'; route: string }
   | { type: 'constellation.signal'; signal: ConstellationSignal }
+  /** An action ran without confirmation (routine rule, persistent grant, engine classifier). */
+  | { type: 'permission.auto'; agentId: string; agentName: string; missionId: string; title: string; via: 'policy' | 'grant' | 'engine'; category: string }
 
 export type InvalidateScope =
   | 'agents'

@@ -6,7 +6,8 @@ import { approvalRequests, executionEvents, fileChanges, fileInventories, missio
 import { takeSnapshot } from './files/snapshot'
 import type { SecurityService } from './security/service'
 import type { AgentManager } from './agents'
-import type { AgentEngine, ApprovalAsk, EngineEvent, EngineId, EngineRunResult, UsageReport } from './engine/types'
+import type { AgentEngine, ApprovalAsk, AutoDecision, EngineEvent, EngineId, EngineRunResult, UsageReport } from './engine/types'
+import { GrantStore } from './permission-grants'
 import type { EventBus } from './event-bus'
 import type { Journal } from './journal'
 import type { UsageTracker } from './usage'
@@ -49,6 +50,10 @@ export class AgentRunner {
   private workspaceEpoch = new Map<string, number>()
   /** approvalId → resolver of the engine's pending question. */
   private pendingApprovals = new Map<string, { missionId: string; resolve: (ok: boolean, cancelled?: boolean) => void }>()
+  /** Persistent authorisations, consulted before any human is asked. */
+  readonly grants: GrantStore
+  /** Folders no agent tool may touch (Orbit's data dir: database, grants, engine config). */
+  protectedPaths: string[] = []
 
   constructor(
     private db: OrbitDb,
@@ -57,7 +62,9 @@ export class AgentRunner {
     private agents: AgentManager,
     private usage: UsageTracker,
     private security: SecurityService | null = null,
-  ) {}
+  ) {
+    this.grants = new GrantStore(db)
+  }
 
   hasPendingApproval(approvalId: string): boolean {
     return this.pendingApprovals.has(approvalId)
@@ -197,8 +204,29 @@ export class AgentRunner {
       }
     }
 
+    const workspace = job.workspace ?? mission.workspace!
+    /** Routine action or persistent grant: runs, the user is told without being interrupted. */
+    const recordAuto = (title: string, via: 'policy' | 'grant' | 'engine', category: string, reason: string) => {
+      this.security?.audit({ agentId: agent.id, missionId, layer: via, action: `auto.${category}`, target: title, decision: 'auto', reason })
+      this.bus.emit({ type: 'permission.auto', agentId: agent.id, agentName: agent.name, missionId, title, via, category })
+    }
+    const autoAllowed = (d: AutoDecision) => {
+      ensureTool(d.tool)
+      recordAuto(d.tool.title, d.via, d.category, d.reason)
+    }
+
     const requestApproval = (ask: ApprovalAsk): Promise<boolean> => {
       if (job.signal.aborted) return Promise.resolve(false)
+      // A persistent « yes » for this exact operation, companion and folder: no question.
+      const key = ask.payload.grant?.key
+      const grant = key ? this.grants.find({ agentId: agent.id, workspace, missionId, key }) : null
+      if (grant) {
+        this.grants.touch(grant.id)
+        const toolCallId = ensureTool(ask.tool)
+        event('approval', `Autorisé par votre règle « ${grant.label} » (${grant.scope === 'always' ? 'toujours' : 'cette mission'})`, { toolCallId, grantId: grant.id })
+        recordAuto(ask.summary, 'grant', ask.payload.category ?? ask.tool.kind, `Autorisation ${grant.scope === 'always' ? 'permanente' : 'de mission'} : ${grant.label}`)
+        return Promise.resolve(true)
+      }
       const toolCallId = ensureTool(ask.tool)
       this.db.update(toolCalls).set({ status: 'awaiting_approval' }).where(eq(toolCalls.id, toolCallId)).run()
       pushTool(toolCallId)
@@ -206,7 +234,7 @@ export class AgentRunner {
       const summary = `${agent.name} : ${ask.summary}`
       this.db
         .insert(approvalRequests)
-        .values({ id, agentId: agent.id, missionId, executionId, toolCallId, kind: 'tool_use', summary, detail: ask.payload.reason ?? null, payload: ask.payload, status: 'pending', createdAt: nowIso() })
+        .values({ id, agentId: agent.id, missionId, executionId, toolCallId, kind: 'tool_use', summary, detail: ask.payload.reason ?? null, payload: ask.payload.grant ? { ...ask.payload, grant: { ...ask.payload.grant, workspace } } : ask.payload, status: 'pending', createdAt: nowIso() })
         .run()
       event('approval', `Demande de validation : ${ask.summary}`, { approvalId: id, toolCallId })
       this.journal.activity({ type: 'approval.requested', level: 'warning', agentId: agent.id, missionId, title: 'Validation demandée', detail: summary })
@@ -239,7 +267,6 @@ export class AgentRunner {
     }
 
     setActivity('starting', `Démarre ${job.engine.name}`)
-    const workspace = job.workspace ?? mission.workspace!
     const permissions = job.permissions ?? agent.permissions
     const shared = (this.activeWorkspaces.get(workspace) ?? 0) > 0
     this.activeWorkspaces.set(workspace, (this.activeWorkspaces.get(workspace) ?? 0) + 1)
@@ -256,13 +283,21 @@ export class AgentRunner {
           prompt: job.prompt,
           instructions: job.instructions,
           model: agent.model && agent.model !== 'default' ? agent.model : null,
-          policy: { workspace, permissions, autonomy: agent.autonomy, isolation: agent.isolation },
+          policy: {
+            workspace,
+            permissions,
+            autonomy: agent.autonomy,
+            isolation: agent.isolation,
+            // Only what Orbit itself configures on this Mac counts as containment.
+            commandsContained: !job.remote && job.engine.capabilities.containsCommands === true,
+            protectedPaths: job.remote ? [] : this.protectedPaths,
+          },
           secret: job.secret,
           budgetUsd: job.budgetUsd,
           effort: agent.effort,
           signal: job.signal,
         },
-        { emit: onEvent, requestApproval },
+        { emit: onEvent, requestApproval, autoAllowed },
       )
     } finally {
       concurrent = concurrent || (this.activeWorkspaces.get(workspace) ?? 1) > 1 || this.workspaceEpoch.get(workspace) !== epoch
