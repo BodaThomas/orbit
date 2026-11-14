@@ -100,7 +100,7 @@ describe('automatisations — scheduler', () => {
     expect(s.scheduler.get(once.id).status).toBe('completed')
     const capped = s.scheduler.create(s.input({ name: 'Limité', maxRunsPerDay: 1 }))
     s.scheduler.runNow(capped.id)
-    expect(s.scheduler.runNow(capped.id).status).toBe('skipped')
+    expect(s.scheduler.runNow(capped.id)!.status).toBe('skipped')
   })
 
   it('déclencheur événementiel : fin d’une mission → automatisation, sans boucle', async () => {

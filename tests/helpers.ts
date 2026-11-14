@@ -18,6 +18,10 @@ import { ProviderRegistry } from '../src/main/core/providers'
 import { SettingsStore } from '../src/main/core/settings'
 import { UsageTracker } from '../src/main/core/usage'
 import { openDatabase } from '../src/main/infra/db/client'
+import { openNodeSqliteDatabase } from '../src/main/infra/db/node-sqlite'
+
+/** ORBIT_TEST_DB=node runs the whole suite against node:sqlite (the runtime's driver). */
+export const openTestDatabase = (file = ':memory:') => (process.env.ORBIT_TEST_DB === 'node' ? openNodeSqliteDatabase(file) : openDatabase(file))
 import { ADAPTERS, type ProviderAdapter, type StreamChunk } from '../src/main/infra/providers'
 
 /** A deterministic adapter: streams `words`, can be slowed down or made to fail. */
@@ -44,7 +48,7 @@ export function fakeAdapter(opts: { words?: string[]; delayMs?: number; fail?: s
 }
 
 export function makeCore(adapter: ProviderAdapter = fakeAdapter(), engines: Partial<Record<EngineId, AgentEngine>> = {}) {
-  const handle = openDatabase(':memory:')
+  const handle = openTestDatabase()
   const db = handle.db
   const bus = new EventBus()
   const events: OrbitEvent[] = []
