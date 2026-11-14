@@ -271,6 +271,32 @@ export const securityAuditEvents = sqliteTable(
   (t) => [index('security_audit_created_idx').on(t.createdAt)],
 )
 
+/**
+ * Persistent « yes » given by the user (« for this mission » / « always for this companion and
+ * this folder »), limited to one exact operation. Only written from the UI, never by an engine.
+ */
+export const permissionGrants = sqliteTable(
+  'permission_grants',
+  {
+    id: text('id').primaryKey(),
+    agentId: text('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    workspace: text('workspace').notNull(),
+    scope: text('scope').notNull(),
+    missionId: text('mission_id'),
+    kind: text('kind').notNull(),
+    operationKey: text('operation_key').notNull(),
+    label: text('label').notNull(),
+    category: text('category'),
+    uses: integer('uses').notNull().default(0),
+    lastUsedAt: text('last_used_at'),
+    revokedAt: text('revoked_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('permission_grants_lookup_idx').on(t.agentId, t.operationKey)],
+)
+
 /** Official subscription rate-limit snapshots emitted by an engine during a run. */
 export const subscriptionUsageRecords = sqliteTable(
   'subscription_usage_records',

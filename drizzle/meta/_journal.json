@@ -43,6 +43,13 @@
       "when": 1794643248888,
       "tag": "0005_remote_runtime",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1794681111362,
+      "tag": "0006_permission_grants",
+      "breakpoints": true
     }
   ]
 }
