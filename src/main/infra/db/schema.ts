@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm'
 import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 import type { Recurrence } from '@shared/schedule'
-import type { AgentPermissions, ApprovalPayload, Appearance, ConstellationLimits, RateLimitWindow, StructuredResult, SubtaskSpec } from '@shared/types'
+import type { AgentPermissions, ApprovalPayload, Appearance, ConstellationLimits, PlanTaskRecord, RateLimitWindow, StructuredResult, SubtaskSpec } from '@shared/types'
 
 const now = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`
 const createdAt = () => text('created_at').notNull().default(now)
@@ -486,6 +486,8 @@ export const constellationDefinitions = sqliteTable('constellation_definitions',
   permissions: text('permissions', { mode: 'json' }).$type<AgentPermissions>().notNull(),
   limits: text('limits', { mode: 'json' }).$type<ConstellationLimits>().notNull(),
   isTemplate: integer('is_template', { mode: 'boolean' }).notNull().default(false),
+  /** When a coordinator's plan needs the user's explicit approval: never, when it writes, always. */
+  planApproval: text('plan_approval').notNull().default('auto'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 })
@@ -531,6 +533,14 @@ export const constellationRuns = sqliteTable(
     finishedAt: text('finished_at'),
     /** Runtime that coordinates this run (synced copy on the Mac). */
     machineId: text('machine_id'),
+    /** What the drive loop is doing inside an active status (planning, executing, synthesizing). */
+    phase: text('phase'),
+    /** Time actually spent driving (pauses and approvals excluded): the duration limit uses it. */
+    activeMs: integer('active_ms').notNull().default(0),
+    /** Last coordinator execution whose reply Orbit has read (a reply is never processed twice). */
+    lastIngestedExecutionId: text('last_ingested_execution_id'),
+    /** Optimistic concurrency: bumped on every lifecycle transition. */
+    version: integer('version').notNull().default(0),
   },
   (t) => [index('constellation_runs_def_idx').on(t.constellationId, t.createdAt), uniqueIndex('constellation_runs_idem_unique').on(t.idempotencyKey)],
 )
@@ -565,6 +575,51 @@ export const executionHandoffs = sqliteTable(
     createdAt: createdAt(),
   },
   (t) => [index('handoffs_run_idx').on(t.runId, t.createdAt)],
+)
+
+export const constellationPlans = sqliteTable(
+  'constellation_plans',
+  {
+    id: text('id').primaryKey(),
+    runId: text('run_id')
+      .notNull()
+      .references(() => constellationRuns.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    round: integer('round').notNull(),
+    /** proposed → approved | rejected | superseded ; invalid when Orbit refused it. */
+    status: text('status').notNull(),
+    hash: text('hash').notNull(),
+    tasks: text('tasks', { mode: 'json' }).$type<PlanTaskRecord[]>().notNull(),
+    questions: text('questions', { mode: 'json' }).$type<string[]>().notNull(),
+    note: text('note'),
+    errors: text('errors', { mode: 'json' }).$type<string[]>().notNull(),
+    /** coordinator (drive loop), conversation (a chat reply outside the loop), user (edited). */
+    source: text('source').notNull(),
+    sourceExecutionId: text('source_execution_id'),
+    approvalReason: text('approval_reason'),
+    createdAt: createdAt(),
+    decidedAt: text('decided_at'),
+    decidedBy: text('decided_by'),
+  },
+  (t) => [uniqueIndex('constellation_plans_version_unique').on(t.runId, t.version), uniqueIndex('constellation_plans_source_unique').on(t.runId, t.sourceExecutionId)],
+)
+
+export const constellationRunEvents = sqliteTable(
+  'constellation_run_events',
+  {
+    id: text('id').primaryKey(),
+    runId: text('run_id')
+      .notNull()
+      .references(() => constellationRuns.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    level: text('level').notNull().default('info'),
+    message: text('message').notNull(),
+    data: text('data', { mode: 'json' }).$type<Record<string, unknown>>(),
+    actor: text('actor').notNull().default('orbit'),
+    idempotencyKey: text('idempotency_key'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('constellation_run_events_run_idx').on(t.runId, t.createdAt), uniqueIndex('constellation_run_events_idem_unique').on(t.idempotencyKey)],
 )
 
 export const agentWorkspaces = sqliteTable(
