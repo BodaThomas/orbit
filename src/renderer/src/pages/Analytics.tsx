@@ -7,7 +7,9 @@ import { Badge, Skeleton } from '@/components/ui/field'
 import { Tooltip } from '@/components/ui/overlay'
 import { cn } from '@/lib/cn'
 import { compactNumber, duration, integer, money, moneyParts } from '@/lib/format'
-import { useAgents, useProviders, useUsage } from '@/lib/queries'
+import { leaders } from '@shared/stats'
+import { useAgents, useProviders, useQuotas, useUsage } from '@/lib/queries'
+import { QuotaCard } from '@/orbit/QuotaCard'
 import { CompanionAvatar } from '@/orbit/CompanionAvatar'
 import { OrbitEmptyState } from '@/orbit/EmptyState'
 import { ProviderMark } from '@/orbit/ProviderMark'
@@ -136,6 +138,48 @@ function Ring({ value, size = 64 }: { value: number; size?: number }) {
   )
 }
 
+function SubscriptionPanel() {
+  const usage = useUsage()
+  const quotas = useQuotas()
+  const providers = useProviders()
+  const u = usage.data
+  if (!u) return null
+  const sub = u.subscriptionMonth
+  const subEngines = (providers.data ?? []).filter((p) => p.id === 'claude-code' || p.id === 'codex')
+  return (
+    <section className="card mt-4 p-4">
+      <div className="mb-3 flex items-baseline justify-between">
+        <div className="text-[13px] font-medium text-fg">Abonnements <span className="font-normal text-fg-3">· ce mois</span></div>
+        <span className="text-2xs text-fg-4">Jamais additionné aux dépenses ci-dessus</span>
+      </div>
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] gap-4">
+        <div className="space-y-2 text-[13px]">
+          {[
+            ['Dépense API mesurée', money(u.month.official), 'Montant renvoyé par un fournisseur'],
+            ['Coût API estimé', money(u.month.estimated), 'Tarifs publics datés'],
+            ['Utilisation via abonnement', sub.requests ? `Inclus dans votre abonnement — ${integer(sub.tokens)} jetons` : 'Aucune', `${integer(sub.requests)} requête${sub.requests > 1 ? 's' : ''}`],
+            ['Équivalent théorique au tarif API', sub.equivalentUsd != null ? `≈ ${money(sub.equivalentUsd)}` : '—', 'Indicatif, non facturé'],
+            ['Coût indisponible', `${integer(u.month.unknownCount)} req.`, 'Aucun tarif fiable connu'],
+          ].map(([k, v, hint]) => (
+            <div key={k} className="flex items-start justify-between gap-3 border-b border-line pb-2 last:border-0">
+              <span className="text-fg-3">{k}<span className="block text-2xs text-fg-4">{hint}</span></span>
+              <span className="text-right text-fg tabular">{v}</span>
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          {subEngines.map((p) => (
+            <div key={p.id}>
+              <div className="mb-1.5 flex items-center gap-2 text-[12.5px] text-fg-2"><ProviderMark id={p.id} size={16} /> {p.name}</div>
+              <QuotaCard providerId={p.id} engineName={p.name} snapshot={quotas.data?.find((q) => q.providerId === p.id)} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
 const PROVIDER_COLORS = ['#A59BFA', '#7E9CE8', '#69C996', '#E5B565']
 
 export function AnalyticsPage() {
@@ -148,15 +192,17 @@ export function AnalyticsPage() {
   if (usage.isLoading || !u) return <Page><PageHeader title="Statistiques" /><Skeleton className="h-96 rounded-xl" /></Page>
   const today = moneyParts(known(u.today))
   const month = known(u.month)
-  const maxAgent = Math.max(0.0001, ...u.byAgentMonth.map((a) => known(a.cost)))
+  const maxRequests = Math.max(1, ...u.byAgentMonth.map((a) => a.requests))
   const totalProv = u.byProviderToday.reduce((s, p) => s + known(p.cost), 0)
   const dailyPct = u.dailyLimitUsd ? Math.min(100, (known(u.today) / u.dailyLimitUsd) * 100) : null
   const monthPct = u.monthlyBudgetUsd ? Math.min(100, (month / u.monthlyBudgetUsd) * 100) : null
 
   const yesterday = known(u.yesterday)
-  const leader = u.byAgentMonth[0] ? byId.get(u.byAgentMonth[0].agentId) : undefined
-  const totalMissions = u.missionsDone + u.missionsFailed
-  const successRate = totalMissions ? u.missionsDone / totalMissions : 0
+  // « Le plus sollicité » = le plus de requêtes ; les égalités sont annoncées comme telles.
+  const top = leaders(u.byAgentMonth.map((r) => ({ ...r, knownCost: known(r.cost) })), 'requests').map((r) => byId.get(r.agentId)?.name).filter(Boolean) as string[]
+  const mc = u.missionCounts
+  const totalMissions = mc.done + mc.failed
+  const successRate = mc.successRate ?? 0
   const activeDays = u.daily.filter((d) => d.official + d.estimated > 0).length
   const tokens = u.tokensMonth.input + u.tokensMonth.output
   const avgDuration = u.avgMissionSeconds != null ? duration(new Date(0).toISOString(), new Date(u.avgMissionSeconds * 1000).toISOString()) : '—'
@@ -169,7 +215,8 @@ export function AnalyticsPage() {
           u.requestsMonth ? (
             <span>
               Ce mois-ci, {money(month)} pour {integer(u.requestsMonth)} requêtes
-              {leader && <span className="text-fg-3"> · {leader.name} est le plus sollicité</span>}
+              {top.length === 1 && <span className="text-fg-3"> · {top[0]} est le plus sollicité</span>}
+              {top.length > 1 && <span className="text-fg-3"> · {top.slice(0, -1).join(', ')} et {top[top.length - 1]} sont les plus sollicités, ex æquo</span>}
               <span className="text-fg-3"> · actif {activeDays} jour{activeDays > 1 ? 's' : ''} sur {u.daily.length}</span>
             </span>
           ) : (
@@ -241,13 +288,15 @@ export function AnalyticsPage() {
             </div>
             <div>
               <div className="text-[13px] text-fg">Taux de réussite</div>
-              <div className="mt-0.5 text-[12px] leading-snug text-fg-3">{totalMissions ? `${u.missionsDone} sur ${totalMissions} missions menées à terme` : 'Aucune mission terminée ce mois-ci'}</div>
+              <div className="mt-0.5 text-[12px] leading-snug text-fg-3">{totalMissions ? `${mc.done} sur ${totalMissions} missions menées à terme` : 'Aucune mission terminée ce mois-ci'}</div>
+              <div className="text-[11px] text-fg-4">Les missions annulées n’entrent pas dans le taux.</div>
             </div>
           </div>
           <div className="mt-auto divide-y divide-line pt-4 text-[13px]">
             {[
               ['Terminées', integer(u.missionsDone), 'text-success'],
-              ['En échec', integer(u.missionsFailed), u.missionsFailed ? 'text-warning' : 'text-fg'],
+              ['En échec', integer(mc.failed), mc.failed ? 'text-warning' : 'text-fg'],
+              ['Annulées', integer(mc.cancelled), 'text-fg'],
               ['Durée moyenne', avgDuration, 'text-fg'],
             ].map(([k, v, c]) => (
               <div key={k} className="flex items-center justify-between py-2">
@@ -260,22 +309,23 @@ export function AnalyticsPage() {
       </div>
 
       <div className="grid grid-cols-2 items-start gap-4">
-        <Panel title={<span>Classement des compagnons <span className="font-normal text-fg-3">· ce mois</span></span>}>
+        <Panel title={<span>Classement des compagnons <span className="font-normal text-fg-3">· requêtes ce mois</span></span>}>
           {u.byAgentMonth.length === 0 && <OrbitEmptyState compact title="Aucune consommation ce mois-ci" body="Discutez avec un compagnon ou lancez une mission pour voir apparaître sa consommation." />}
           {u.byAgentMonth.map((r, i) => {
             const a = byId.get(r.agentId)
             const v = known(r.cost)
+            const rank = u.byAgentMonth.findIndex((x) => x.requests === r.requests) + 1
             return (
               <div key={r.agentId} className="flex items-center gap-3 rounded-[10px] px-2.5 py-2 transition-colors hover:bg-white/[0.02]">
-                <span className={cn('w-4 text-center text-[11px] tabular', i === 0 ? 'font-semibold text-accent' : 'text-fg-4')}>{i + 1}</span>
+                <span className={cn('w-4 text-center text-[11px] tabular', rank === 1 ? 'font-semibold text-accent' : 'text-fg-4')} title={rank !== i + 1 ? 'Ex æquo' : undefined}>{rank}</span>
                 {a ? <CompanionAvatar appearance={a.appearance} size={26} /> : <span className="size-[26px] rounded-full bg-white/5" />}
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline justify-between gap-2 text-[13px]">
                     <span className="truncate text-fg">{a?.name ?? 'Compagnon supprimé'} <span className="text-[11.5px] text-fg-3">· {integer(r.requests)} req.{r.cost.unknownCount ? ` · ${r.cost.unknownCount} au coût inconnu` : ''}</span></span>
-                    <span className="text-fg-2 tabular">{money(v)}</span>
+                    <span className="text-fg-2 tabular">{v > 0 ? money(v) : r.cost.subscriptionCount ? 'abonnement' : money(0)}</span>
                   </div>
                   <div className="mt-1.5 h-[5px] overflow-hidden rounded-full bg-white/[0.05]">
-                    <div className="h-full rounded-full bg-gradient-to-r from-accent/50 to-accent" style={{ width: `${(v / maxAgent) * 100}%` }} />
+                    <div className="h-full rounded-full bg-gradient-to-r from-accent/50 to-accent" style={{ width: `${(r.requests / maxRequests) * 100}%` }} />
                   </div>
                 </div>
               </div>
@@ -329,6 +379,7 @@ export function AnalyticsPage() {
           </div>
         </Panel>
       </div>
+      <SubscriptionPanel />
     </Page>
   )
 }
