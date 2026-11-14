@@ -70,9 +70,9 @@ export function ConstellationsPage() {
                           <CompanionAvatar appearance={a!.appearance} size={22} />
                           <span className="min-w-0 flex-1">
                             <span className="block text-[13px] text-fg">{a!.name}{a!.id === wf.coordinatorAgentId && <span className="text-fg-3"> · coordinateur</span>}</span>
-                            {m && <button onClick={() => navigate(`/missions/${m.id}`)} className="block truncate text-left text-xs text-fg-3 hover:text-fg-2">{m.title}</button>}
+                            {m && <button onClick={() => navigate(`/missions/${m.id}`)} className="block max-w-full truncate text-left text-xs text-fg-3 hover:text-fg-2">{m.title}</button>}
                           </span>
-                          {m && <MissionStatusLabel status={m.status} />}
+                          {m && <span className="shrink-0"><MissionStatusLabel status={m.status} /></span>}
                         </li>
                       )
                     })}
