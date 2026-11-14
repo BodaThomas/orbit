@@ -1,14 +1,17 @@
 import { useState } from 'react'
-import { Bell, Database, Eye, EyeOff, FlaskConical, Info, KeyRound, ShieldCheck, SlidersHorizontal, Wallet } from 'lucide-react'
+import { Bell, CheckCircle2, Database, Eye, EyeOff, XCircle, FlaskConical, Info, KeyRound, ShieldCheck, SlidersHorizontal, Wallet } from 'lucide-react'
 import type { ProviderInfo } from '@shared/types'
 import { Page, PageHeader } from '@/components/shell/Page'
 import { Button } from '@/components/ui/button'
 import { Badge, Input, Segmented, Switch } from '@/components/ui/field'
 import { cn } from '@/lib/cn'
 import { dateTime, relative } from '@/lib/format'
-import { useAction, useAudit, useBootstrap, useNotifications, useProviders } from '@/lib/queries'
+import { useQueryClient } from '@tanstack/react-query'
+import { call } from '@/lib/api'
+import { useAction, useAudit, useBootstrap, useNotifications, useProviders, useSecurity } from '@/lib/queries'
 import { useConfirm } from '@/orbit/Confirm'
 import { ProviderMark } from '@/orbit/ProviderMark'
+import { ClaudeCodeConnection } from '@/orbit/ClaudeCodeConnection'
 import { navigate } from '@/stores/router'
 
 const SECTIONS = [
@@ -121,6 +124,72 @@ export function ProviderConnect({ provider, compact }: { provider: ProviderInfo;
   )
 }
 
+function SecurityLevels() {
+  const security = useSecurity()
+  const qc = useQueryClient()
+  const [testing, setTesting] = useState(false)
+  const iso = security.data?.isolation
+  const rerun = async () => {
+    setTesting(true)
+    try {
+      qc.setQueryData(['security'], await call('security.selfTest'))
+    } finally {
+      setTesting(false)
+    }
+  }
+  return (
+    <>
+      <div className="px-1 text-xs font-medium text-fg-3">Niveaux de sécurité des compagnons</div>
+      <Card>
+        <Row title="Niveau 1 · Politique d’Orbit" body="Chaque action d’un moteur (lecture, écriture, commande, réseau) est évaluée par Orbit avant de s’exécuter : dossier autorisé, liens symboliques résolus, fichiers sensibles (.env, clés), commandes destructrices. Une commande shell reste toutefois opaque : ce niveau ne garantit pas l’isolation.">
+          <Badge tone="success">Toujours actif</Badge>
+        </Row>
+        <Row title="Niveau 2 · Bac à sable du moteur" body="Codex : Seatbelt en lecture seule (supervisé) ou écriture limitée au dossier, réseau coupé sans permission. Claude : outils retirés, lecture confinée aux dossiers de travail, commandes dans le bac à sable de Claude Code. Ces bacs à sable limitent l’écriture et le réseau, pas toutes les lectures.">
+          <Badge tone="success">Selon le moteur</Badge>
+        </Row>
+        <Row
+          title="Niveau 3 · Isolation renforcée (ce Mac)"
+          body={
+            <>
+              Profil Seatbelt d’Orbit appliqué à tout l’arbre de processus du moteur : votre dossier personnel devient illisible hors du projet, des outils de développement et du dossier de connexion du moteur. Activable par compagnon, uniquement si l’auto-test ci-dessous réussit.
+              {iso && (
+                <span className="mt-2 grid grid-cols-2 gap-x-4 gap-y-0.5">
+                  {iso.checks.map((c) => (
+                    <span key={c.label} className={cn('flex items-center gap-1.5 text-[11.5px]', c.ok ? 'text-fg-3' : 'text-danger')}>
+                      {c.ok ? <CheckCircle2 className="size-3 text-success" /> : <XCircle className="size-3" />} {c.label}
+                    </span>
+                  ))}
+                </span>
+              )}
+              {iso?.error && <span className="mt-1 block text-danger">{iso.error}</span>}
+            </>
+          }
+        >
+          <div className="flex flex-col items-end gap-1.5">
+            <Badge tone={iso?.ok ? 'success' : iso?.available === false ? 'neutral' : 'danger'}>{iso?.ok ? 'Prouvée' : iso?.available === false ? 'Indisponible' : 'Échec'}</Badge>
+            <Button size="sm" variant="ghost" onClick={rerun} disabled={testing}>{testing ? 'Test…' : 'Relancer l’auto-test'}</Button>
+          </div>
+        </Row>
+        <Row title="Isolation forte (VM / conteneur)" body="Seule une machine séparée garantit qu’aucune donnée de ce Mac n’est lisible. Le runtime distant d’Orbit (Machines) peut s’exécuter sur un serveur Linux ou une VM dédiée : c’est le mode recommandé pour les tâches non supervisées.">
+          <Button size="sm" variant="ghost" onClick={() => navigate('/machines')}>Machines</Button>
+        </Row>
+      </Card>
+      <div className="px-1 pt-2 text-xs font-medium text-fg-3">Décisions de sécurité récentes</div>
+      <Card>
+        {security.data?.events.slice(0, 40).map((e) => (
+          <div key={e.id} className="grid grid-cols-[110px_90px_1fr_auto] items-center gap-3 px-4 py-2 text-[12.5px]">
+            <span className="text-fg-3 tabular">{dateTime(e.createdAt)}</span>
+            <span className="text-fg-3">{({ policy: 'Politique', engine: 'Moteur', isolation: 'Isolation', approval: 'Vous' } as Record<string, string>)[e.layer] ?? e.layer}</span>
+            <span className="truncate text-[12px] text-fg-2" title={e.reason ?? undefined}>{e.target ?? e.action}{e.reason ? ` — ${e.reason}` : ''}</span>
+            <Badge tone={e.decision === 'deny' || e.decision === 'denied' ? 'danger' : e.decision === 'ask' ? 'warning' : 'success'}>{e.decision === 'deny' ? 'bloqué' : e.decision === 'denied' ? 'refusé' : e.decision === 'approved' ? 'approuvé' : e.decision}</Badge>
+          </div>
+        ))}
+        {security.data?.events.length === 0 && <div className="px-4 py-6 text-center text-[13px] text-fg-3">Aucune décision enregistrée.</div>}
+      </Card>
+    </>
+  )
+}
+
 export function SettingsPage({ section }: { section?: string }) {
   const current = SECTIONS.find((s) => s.key === section)?.key ?? 'general'
   const boot = useBootstrap()
@@ -175,7 +244,13 @@ export function SettingsPage({ section }: { section?: string }) {
               {!boot.data?.secureStorage && (
                 <div className="rounded-xl bg-danger/[0.06] p-4 text-[13px] text-danger ring-1 ring-danger/20">Le stockage sécurisé (Trousseau) est indisponible : aucune clé ne peut être enregistrée.</div>
               )}
-              <Card>{providers.data?.filter((p) => p.availability === 'available' && p.id !== 'demo').map((p) => <ProviderConnect key={p.id} provider={p} />)}</Card>
+              <div className="px-1 text-xs font-medium text-fg-3">Anthropic · deux connexions indépendantes</div>
+              <Card>
+                {providers.data?.filter((p) => p.id === 'claude-code').map((p) => <ClaudeCodeConnection key={p.id} provider={p} />)}
+                {providers.data?.filter((p) => p.id === 'anthropic' || p.id === 'claude-agent').map((p) => <ProviderConnect key={p.id} provider={p} />)}
+              </Card>
+              <div className="px-1 pt-2 text-xs font-medium text-fg-3">OpenAI</div>
+              <Card>{providers.data?.filter((p) => p.availability === 'available' && (p.id === 'openai' || p.id === 'codex')).map((p) => <ProviderConnect key={p.id} provider={p} />)}</Card>
               <div className="px-1 pt-2 text-xs font-medium text-fg-3">Prévus</div>
               <Card>{providers.data?.filter((p) => p.availability !== 'available').map((p) => <ProviderConnect key={p.id} provider={p} compact />)}</Card>
             </>
@@ -230,6 +305,7 @@ export function SettingsPage({ section }: { section?: string }) {
 
           {current === 'security' && (
             <>
+              <SecurityLevels />
               <Card>
                 <Row title="Isolation du rendu" body="Context isolation, sandbox, aucune intégration Node, CSP stricte, IPC sur liste blanche et validé."><Badge tone="success">Active</Badge></Row>
                 <Row title="Secrets" body={boot.data?.secureStorage ? 'Chiffrés via safeStorage (clé dans le Trousseau macOS).' : 'Indisponible'}><Badge tone={boot.data?.secureStorage ? 'success' : 'danger'}>{boot.data?.secureStorage ? 'Trousseau' : 'Indisponible'}</Badge></Row>

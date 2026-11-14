@@ -1,5 +1,6 @@
 import { Rocket, ShieldAlert, TriangleAlert } from 'lucide-react'
 import { PALETTES, STATUS_LABELS } from '@shared/catalog'
+import { ENGINE_INFO } from '@shared/engines'
 import type { Agent, Mission, ProviderInfo } from '@shared/types'
 import { cn } from '@/lib/cn'
 import { duration, relative } from '@/lib/format'
@@ -95,7 +96,7 @@ export function CompanionCard({ agent, mission, provider }: { agent: Agent; miss
       </div>
       <div className="relative flex h-9 items-center gap-2 px-3.5 text-[12px] text-fg-3">
         <ProviderMark id={agent.providerId} size={15} />
-        <span className="truncate">{model}</span>
+        <span className="truncate"><span className="text-fg-2">{ENGINE_INFO[agent.providerId].label}</span> · {model === 'default' ? 'modèle par défaut' : model}</span>
         {!busy && (
           <span
             role="button"

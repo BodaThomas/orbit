@@ -2,13 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { LocateFixed, Minus, Plus, Rocket, Waypoints } from 'lucide-react'
 import { ACTIVE_MISSION_STATUSES } from '@shared/mission-states'
 import { PALETTES, STATUS_LABELS } from '@shared/catalog'
-import type { Agent, AgentStatus, Workflow } from '@shared/types'
+import type { Agent, AgentStatus } from '@shared/types'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/field'
 import { Tooltip } from '@/components/ui/overlay'
 import { cn } from '@/lib/cn'
-import { duration } from '@/lib/format'
-import { useAgents, useMissions, useWorkflows } from '@/lib/queries'
+import { duration, relative } from '@/lib/format'
+import { useAgents, useAutomations, useConstellationRuns, useConstellations, useMissions } from '@/lib/queries'
 import { CompanionAvatar, statusColorClass } from '@/orbit/CompanionAvatar'
 import { OrbitEmptyState } from '@/orbit/EmptyState'
 import { navigate } from '@/stores/router'
@@ -59,7 +59,12 @@ const parallax = (k: number): React.CSSProperties => ({
 
 export function UniversePage() {
   const agents = useAgents()
-  const workflows = useWorkflows()
+  const defs = useConstellations()
+  const runs = useConstellationRuns()
+  const automations = useAutomations()
+  // Real constellations (definitions); « active » only while a run is actually in progress.
+  const activeRunDefs = new Set((runs.data ?? []).filter((r) => ['planning', 'running', 'synthesizing'].includes(r.status)).map((r) => r.constellationId))
+  const workflows = { data: (defs.data ?? []).filter((d) => !d.isTemplate).map((d) => ({ id: d.id, name: d.name, coordinatorAgentId: d.coordinatorAgentId, memberAgentIds: d.members.map((m) => m.agentId), status: activeRunDefs.has(d.id) ? 'active' : 'done', missionId: null, createdAt: d.createdAt })) }
   const missions = useMissions()
   const root = useRef<HTMLDivElement>(null)
   const ref = useRef<HTMLDivElement>(null)
@@ -110,7 +115,7 @@ export function UniversePage() {
   const active = hover ?? focus
 
   const links = (workflows.data ?? [])
-    .flatMap((wf: Workflow) => wf.memberAgentIds.filter((m) => m !== wf.coordinatorAgentId).map((m) => ({ wf, from: byId.get(wf.coordinatorAgentId), to: byId.get(m) })))
+    .flatMap((wf) => wf.memberAgentIds.filter((m) => m !== wf.coordinatorAgentId).map((m) => ({ wf, from: byId.get(wf.coordinatorAgentId), to: byId.get(m) })))
     .filter((l) => l.from && l.to)
   // Companions sharing a constellation with the active one stay lit.
   const related = new Set<string>()
@@ -119,6 +124,12 @@ export function UniversePage() {
       if (wf.coordinatorAgentId === active || wf.memberAgentIds.includes(active)) [wf.coordinatorAgentId, ...wf.memberAgentIds].forEach((id) => related.add(id))
   const currentMission = (id: string) => (missions.data ?? []).find((m) => m.agentId === id && ACTIVE_MISSION_STATUSES.includes(m.status))
   const activePlaced = active ? byId.get(active) : undefined
+  /** Next scheduled automation involving this companion (directly or through a constellation). */
+  const nextActionFor = (agentId: string) => {
+    const mine = (automations.data ?? []).filter((a) => a.status === 'active' && a.nextRunAt && (a.targetId === agentId || (a.targetKind === 'constellation' && defs.data?.find((d) => d.id === a.targetId)?.members.some((m) => m.agentId === agentId))))
+    const first = mine.sort((a, b) => a.nextRunAt!.localeCompare(b.nextRunAt!))[0]
+    return first ? { name: first.name, at: first.nextRunAt! } : null
+  }
   const activeConstellations = active ? (workflows.data ?? []).filter((wf) => wf.coordinatorAgentId === active || wf.memberAgentIds.includes(active)) : []
   const cx = size.w / 2
   const cy = size.h / 2 + 10
@@ -267,7 +278,8 @@ export function UniversePage() {
                       strokeWidth={hot ? 1.6 : 1.1}
                       strokeDasharray={hot ? '3 5' : '1 5'}
                       strokeLinecap="round"
-                      className={hot ? 'orbit-anim-flow' : undefined}
+                      // Flowing dashes only while the constellation really runs: never decorative.
+                      className={wf.status === 'active' ? 'orbit-anim-flow' : undefined}
                     />
                   </g>
                 )
@@ -337,7 +349,16 @@ export function UniversePage() {
               )
             })}
 
-          {activePlaced && <InfoCard placed={activePlaced} width={size.w} planet={planetSize} mission={currentMission(activePlaced.agent.id)} />}
+          {activePlaced && (
+            <InfoCard
+              placed={activePlaced}
+              width={size.w}
+              planet={planetSize}
+              mission={currentMission(activePlaced.agent.id)}
+              constellations={activeConstellations.map((w) => w.name)}
+              next={nextActionFor(activePlaced.agent.id)}
+            />
+          )}
         </div>
       )}
 
@@ -361,7 +382,7 @@ export function UniversePage() {
   )
 }
 
-function InfoCard({ placed, width, planet, mission }: { placed: ReturnType<typeof layout>[number]; width: number; planet: number; mission?: { title: string; startedAt: string | null } }) {
+function InfoCard({ placed, width, planet, mission, constellations = [], next }: { placed: ReturnType<typeof layout>[number]; width: number; planet: number; mission?: { title: string; startedAt: string | null }; constellations?: string[]; next?: { name: string; at: string } | null }) {
   const { agent, x, y } = placed
   const right = x < width * 0.62
   const W = 236
@@ -391,6 +412,14 @@ function InfoCard({ placed, width, planet, mission }: { placed: ReturnType<typeo
       ) : (
         agent.description && <div className="mt-2 line-clamp-2 text-[12px] leading-snug text-fg-2">{agent.description}</div>
       )}
+      {constellations.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {constellations.map((c) => (
+            <span key={c} className="flex items-center gap-1 rounded-full bg-accent/10 px-1.5 py-px text-[10.5px] text-accent"><Waypoints className="size-2.5" /> {c}</span>
+          ))}
+        </div>
+      )}
+      {next && <div className="mt-2 text-[11.5px] text-fg-3">Prochaine action : <span className="text-fg-2">{next.name}</span> · {relative(next.at)}</div>}
       <div className="mt-2.5 flex items-center gap-1.5 text-[11px] text-fg-3">
         <Kbd>↵</Kbd> Ouvrir le profil
       </div>

@@ -20,7 +20,7 @@ function workspace() {
   mkdirSync(join(root, 'src'))
   return root
 }
-const policy = (ws: string, permissions: AgentPermissions = ALL, autonomy: RunPolicy['autonomy'] = 'supervised'): RunPolicy => ({ workspace: ws, permissions, autonomy })
+const policy = (ws: string, permissions: AgentPermissions = ALL, autonomy: RunPolicy['autonomy'] = 'supervised'): RunPolicy => ({ workspace: ws, permissions, autonomy, isolation: 'standard' })
 
 function recorder(answer: boolean | ((a: ApprovalAsk) => boolean) = true) {
   const events: EngineEvent[] = []

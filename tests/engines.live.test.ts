@@ -23,7 +23,7 @@ describe.skipIf(!live)('Codex app-server (live)', () => {
 
     const events: EngineEvent[] = []
     const asks: ApprovalAsk[] = []
-    const policy = { workspace: ws, autonomy: 'supervised' as const, permissions: { readFiles: true, writeFiles: true, runCommands: true, network: false, manageProjects: false, externalActions: false } }
+    const policy = { workspace: ws, autonomy: 'supervised' as const, isolation: 'standard' as const, permissions: { readFiles: true, writeFiles: true, runCommands: true, network: false, manageProjects: false, externalActions: false } }
     const first = await engine.run(
       { runId: 'r1', sessionId: null, prompt: 'Crée un fichier NOTES.md contenant une phrase qui résume ce projet. Ne lance aucune commande de test.', instructions: 'Réponds en français, brièvement.', model: null, policy, secret: null, budgetUsd: null, signal: new AbortController().signal },
       { emit: (e) => events.push(e), requestApproval: async (a) => (asks.push(a), false) },

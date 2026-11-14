@@ -1,15 +1,18 @@
 import { useState } from 'react'
-import { Activity, Brain, Folder, Gauge, MessageCircle, MoreHorizontal, Pencil, Plus, Rocket, ShieldCheck, Trash2, Wallet, Wrench } from 'lucide-react'
+import { Activity, Brain, CalendarClock, Waypoints, Folder, Gauge, MessageCircle, MoreHorizontal, Pencil, Plus, Rocket, ShieldCheck, Trash2, Wallet, Wrench } from 'lucide-react'
 import { PALETTES, PERMISSION_LABELS, STATUS_LABELS } from '@shared/catalog'
 import { ACTIVE_MISSION_STATUSES } from '@shared/mission-states'
-import type { Agent, AgentPermissions, MemoryKind } from '@shared/types'
+import { ENGINE_INFO, EFFORT_LEVELS } from '@shared/engines'
+import { effectivePermissions } from '@shared/permissions-matrix'
+import { missionCounts } from '@shared/stats'
+import type { Agent, AgentPermissions, EffectiveLevel, EffectivePermissionRow, MemoryKind } from '@shared/types'
 import { Page } from '@/components/shell/Page'
 import { Button } from '@/components/ui/button'
 import { Badge, Switch, Tabs, Textarea } from '@/components/ui/field'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/overlay'
 import { cn } from '@/lib/cn'
-import { duration, integer, money, relative } from '@/lib/format'
-import { useAction, useActivity, useAgent, useConversations, useMemory, useMissions, useProviders, useUsage } from '@/lib/queries'
+import { compactNumber, duration, integer, money, relative } from '@/lib/format'
+import { useAction, useActivity, useAgent, useAutomations, useConstellations, useConversations, useMachines, useMemory, useMissions, useProviders, useRecentFiles, useSecurity, useUsage } from '@/lib/queries'
 import { ActivityEventRow } from '@/orbit/ActivityEvent'
 import { CompanionAvatar, CompanionStatusIndicator } from '@/orbit/CompanionAvatar'
 import { CompanionContextItems } from '@/orbit/CompanionListItem'
@@ -24,7 +27,8 @@ const TABS = [
   { key: 'missions', label: 'Missions' },
   { key: 'activity', label: 'Activité' },
   { key: 'memory', label: 'Mémoire' },
-  { key: 'tools', label: 'Outils' },
+  { key: 'files', label: 'Fichiers' },
+  { key: 'tools', label: 'Permissions' },
   { key: 'stats', label: 'Statistiques' },
   { key: 'config', label: 'Configuration' },
 ] as const
@@ -141,14 +145,32 @@ function Memory({ agent }: { agent: Agent }) {
   )
 }
 
+const LEVEL_META: Record<EffectiveLevel, { label: string; tone: 'success' | 'warning' | 'neutral' | 'info' }> = {
+  allowed: { label: 'Autorisé', tone: 'success' },
+  ask: { label: 'Sur accord', tone: 'warning' },
+  denied: { label: 'Bloqué', tone: 'neutral' },
+  partial: { label: 'Partiel', tone: 'info' },
+}
+const LAYER_LABELS: Record<EffectivePermissionRow['enforcedBy'][number], string> = {
+  policy: 'Politique Orbit',
+  engine: 'Moteur',
+  sandbox: 'Bac à sable du moteur',
+  isolation: 'Isolation renforcée',
+  approval: 'Votre accord',
+}
+
 function Tools({ agent }: { agent: Agent }) {
   const providers = useProviders()
+  const security = useSecurity()
   const p = providers.data?.find((x) => x.id === agent.providerId)
+  const proven = Boolean(security.data?.isolation.ok)
+  const rows = effectivePermissions(agent, { isolationProven: proven })
+  const engine = ENGINE_INFO[agent.providerId]
   return (
     <div className="space-y-4">
       <div className="rounded-[12px] bg-white/[0.02] p-4 ring-1 ring-line">
         <div className="flex items-center gap-2 text-[13.5px] text-fg">
-          <Wrench className="size-4 text-fg-3" /> Capacités du moteur
+          <Wrench className="size-4 text-fg-3" /> {engine.label} <span className="text-fg-3">· {engine.connection}</span>
         </div>
         <div className="mt-3 flex flex-wrap gap-1.5">
           {p &&
@@ -157,48 +179,100 @@ function Tools({ agent }: { agent: Agent }) {
                 ['streaming', 'Streaming'],
                 ['cancel', 'Annulation'],
                 ['tools', 'Outils'],
-                ['sessions', 'Sessions fournisseur'],
+                ['sessions', 'Sessions reprenables'],
               ] as const
             ).map(([k, l]) => <Badge key={k} tone={p.capabilities[k] ? 'success' : 'neutral'}>{p.capabilities[k] ? '✓' : '—'} {l}</Badge>)}
           {p && <Badge tone="info">Usage : {p.capabilities.usage === 'official' ? 'jetons officiels' : p.capabilities.usage === 'estimated' ? 'estimé' : 'aucun'}</Badge>}
+          <Badge tone={agent.isolation === 'strict' ? (proven ? 'success' : 'danger') : 'neutral'}>
+            {agent.isolation === 'strict' ? (proven ? 'Isolation renforcée' : 'Isolation renforcée non prouvée') : 'Isolation standard'}
+          </Badge>
         </div>
-        <p className="mt-3 text-xs leading-relaxed text-fg-3">
-          {p?.capabilities.tools
-            ? 'Ce moteur peut appeler des outils. Chaque appel passe par le gestionnaire de permissions d’Orbit.'
-            : `${p?.name ?? 'Ce fournisseur'} est utilisé ici en mode conversationnel, sans outils. Les outils fichiers et commandes arrivent avec l’adaptateur Claude Agent SDK, et seront soumis aux permissions ci-dessous.`}
-        </p>
       </div>
-      <div className="divide-y divide-line rounded-[12px] bg-white/[0.02] ring-1 ring-line">
-        {(Object.keys(PERMISSION_LABELS) as (keyof AgentPermissions)[]).map((k) => (
-          <div key={k} className="flex items-center justify-between px-4 py-2.5">
-            <span className="text-[13px] text-fg-2">{PERMISSION_LABELS[k].label}</span>
-            <Badge tone={agent.permissions[k] ? (PERMISSION_LABELS[k].sensitive ? 'warning' : 'success') : 'neutral'}>{agent.permissions[k] ? 'Autorisé' : 'Refusé'}</Badge>
-          </div>
-        ))}
+      <div>
+        <div className="mb-1.5 flex items-baseline justify-between">
+          <div className="text-xs font-medium text-fg-2">Ce que {agent.name} peut réellement faire</div>
+          <span className="text-2xs text-fg-4">Toutes les couches combinées</span>
+        </div>
+        <div className="divide-y divide-line rounded-[12px] bg-white/[0.02] ring-1 ring-line">
+          {rows.map((r) => (
+            <div key={r.key} className="grid grid-cols-[180px_1fr_auto] items-start gap-3 px-4 py-2.5">
+              <span className="text-[13px] text-fg">
+                {r.label}
+                <span className="block text-2xs text-fg-4">{r.key === 'outside' || r.key === 'secrets' ? 'Garde-fou permanent' : `Réglage : ${r.companion ? 'activé' : 'désactivé'}`}</span>
+              </span>
+              <span className="text-[12px] leading-snug text-fg-3">
+                {r.detail}
+                <span className="mt-0.5 block text-2xs text-fg-4">Appliqué par : {r.enforcedBy.map((l) => LAYER_LABELS[l]).join(' · ')}</span>
+              </span>
+              <Badge tone={LEVEL_META[r.effective].tone}>{LEVEL_META[r.effective].label}</Badge>
+            </div>
+          ))}
+        </div>
+        <p className="mt-2 text-2xs leading-relaxed text-fg-4">
+          Les approbations ponctuelles ne valent que pour une action. Aucune autorisation de session n’est mémorisée par Orbit : chaque nouvelle action sensible repasse par la politique.{' '}
+          <button className="text-accent hover:underline" onClick={() => navigate('/settings/security')}>Sécurité et niveaux d’isolation</button>
+        </p>
       </div>
     </div>
   )
+}
+
+function Files({ agent }: { agent: Agent }) {
+  const files = useRecentFiles(agent.id)
+  const [open, setOpen] = useState<string | null>(null)
+  if (files.data?.length === 0)
+    return <OrbitEmptyState compact title="Aucun fichier modifié" body={`Les fichiers créés, modifiés ou supprimés par ${agent.name} apparaîtront ici, avec leur diff et la mission associée.`} />
+  return (
+    <div className="space-y-px">
+      {files.data?.map((f) => (
+        <div key={f.id} className="rounded-[10px] hover:bg-white/[0.02]">
+          <button onClick={() => setOpen(open === f.id ? null : f.id)} className="grid w-full grid-cols-[64px_1fr_auto] items-center gap-3 px-3 py-2 text-left">
+            <FileKindBadge kind={f.kind} />
+            <span className="min-w-0">
+              <span className="block truncate font-mono text-[12.5px] text-fg">{f.path}</span>
+              <span className="block truncate text-2xs text-fg-3">
+                {f.missionShortId} · {f.missionTitle} · {f.source === 'engine' ? 'rapporté par le moteur' : 'détecté par instantané'}
+              </span>
+            </span>
+            <span className="text-2xs text-fg-3 tabular">{relative(f.createdAt)}</span>
+          </button>
+          {open === f.id && (
+            <div className="px-3 pb-3">
+              {f.diff ? <pre className="selectable max-h-80 overflow-auto rounded-[10px] bg-black/30 p-3 font-mono text-[11.5px] leading-relaxed text-fg-2 ring-1 ring-line">{f.diff}</pre> : <div className="text-xs text-fg-3">Diff indisponible pour ce fichier (binaire, trop volumineux ou supprimé).</div>}
+              <button className="mt-1.5 text-xs text-accent hover:underline" onClick={() => navigate(`/missions/${f.missionId}`)}>Ouvrir la mission</button>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export function FileKindBadge({ kind }: { kind: 'add' | 'update' | 'delete' }) {
+  return <Badge tone={kind === 'add' ? 'success' : kind === 'delete' ? 'danger' : 'info'}>{kind === 'add' ? 'Créé' : kind === 'delete' ? 'Supprimé' : 'Modifié'}</Badge>
 }
 
 function Stats({ agent }: { agent: Agent }) {
   const usage = useUsage()
   const missions = useMissions(agent.id)
   const row = usage.data?.byAgentMonth.find((r) => r.agentId === agent.id)
+  const mc = missionCounts(missions.data ?? [])
   const done = missions.data?.filter((m) => m.status === 'done') ?? []
   const avg = done.length ? done.reduce((s, m) => s + (m.finishedAt && m.startedAt ? new Date(m.finishedAt).getTime() - new Date(m.startedAt).getTime() : 0), 0) / done.length : null
-  const tiles = [
-    ['Coût du mois', row ? money(row.cost.official + row.cost.estimated) : money(0), row && row.cost.estimated > 0 ? 'estimé' : undefined],
-    ['Requêtes ce mois', integer(row?.requests ?? 0)],
-    ['Missions terminées', integer(done.length)],
-    ['Durée moyenne', avg != null ? duration(new Date(0).toISOString(), new Date(avg).toISOString()) : '—'],
-  ] as const
+  const tiles: [string, string, string | undefined][] = [
+    ['Dépense du mois', row ? money(row.cost.official + row.cost.estimated) : money(0), row && row.cost.estimated > 0 ? 'dont estimé' : row?.cost.subscriptionCount ? `+ ${row.cost.subscriptionCount} req. incluses dans un abonnement` : undefined],
+    ['Requêtes ce mois', integer(row?.requests ?? 0), row ? `${compactNumber(row.tokens)} jetons` : undefined],
+    ['Missions', `${mc.done} / ${mc.total}`, `${mc.failed} échec${mc.failed > 1 ? 's' : ''} · ${mc.cancelled} annulée${mc.cancelled > 1 ? 's' : ''}`],
+    ['Taux de réussite', mc.successRate == null ? '—' : `${Math.round(mc.successRate * 100)} %`, 'hors missions annulées'],
+    ['Durée moyenne', avg != null ? duration(new Date(0).toISOString(), new Date(avg).toISOString()) : '—', undefined],
+  ]
   return (
-    <div className="grid grid-cols-4 divide-x divide-line rounded-[12px] ring-1 ring-line">
+    <div className="grid grid-cols-5 divide-x divide-line rounded-[12px] ring-1 ring-line">
       {tiles.map(([label, value, hint]) => (
-        <div key={label} className="px-4 py-3">
+        <div key={label} className="min-w-0 px-4 py-3">
           <div className="eyebrow">{label}</div>
           <div className="mt-1.5 text-[22px] leading-7 font-semibold tracking-[-0.02em] text-fg tabular">{value}</div>
-          {hint && <div className="text-2xs text-fg-3">{hint}</div>}
+          {hint && <div className="truncate text-2xs text-fg-3">{hint}</div>}
         </div>
       ))}
     </div>
@@ -206,10 +280,19 @@ function Stats({ agent }: { agent: Agent }) {
 }
 
 function Config({ agent }: { agent: Agent }) {
+  const machines = useMachines()
+  const engine = ENGINE_INFO[agent.providerId]
+  const machine = agent.runtime === 'remote' ? machines.data?.find((m) => m.id === agent.machineId) : null
   const rows: [string, React.ReactNode][] = [
+    ['Moteur', engine.label],
+    ['Mode de connexion', engine.connection],
+    ['Facturation', engine.billing],
+    ['Modèle', agent.model === 'default' ? 'Modèle par défaut du moteur' : agent.model],
+    ['Effort de raisonnement', agent.effort ? (EFFORT_LEVELS.find((e) => e.id === agent.effort)?.label ?? agent.effort) : 'Par défaut'],
     ['Autonomie', { manual: 'Manuel', supervised: 'Supervisé', automated: 'Automatisé' }[agent.autonomy]],
+    ['Isolation', agent.isolation === 'strict' ? 'Renforcée (Seatbelt Orbit)' : 'Standard (politique + bac à sable du moteur)'],
     ['Dossier de travail', agent.workingDirectory ?? '—'],
-    ['Environnement', 'Ce Mac'],
+    ['Machine', machine ? `${machine.name} (distante)` : agent.runtime === 'remote' ? 'Machine distante introuvable' : 'Ce Mac'],
     ['Budget journalier', agent.dailyBudgetUsd != null ? money(agent.dailyBudgetUsd) : 'Illimité'],
     ['Créé', new Date(agent.createdAt).toLocaleString('fr-FR')],
   ]
@@ -217,9 +300,9 @@ function Config({ agent }: { agent: Agent }) {
     <div className="space-y-4">
       <div className="divide-y divide-line rounded-[12px] bg-white/[0.02] ring-1 ring-line">
         {rows.map(([k, v]) => (
-          <div key={k} className="flex items-center justify-between px-4 py-2.5 text-[13px]">
-            <span className="text-fg-3">{k}</span>
-            <span className="selectable text-fg">{v}</span>
+          <div key={k} className="flex items-center justify-between gap-4 px-4 py-2.5 text-[13px]">
+            <span className="shrink-0 text-fg-3">{k}</span>
+            <span className="selectable truncate text-right text-fg">{v}</span>
           </div>
         ))}
       </div>
@@ -358,6 +441,7 @@ export function CompanionProfilePage({ agentId, tab }: { agentId: string; tab?: 
           {current === 'missions' && <Missions agent={agent} />}
           {current === 'activity' && (activity.data?.length ? activity.data.map((e) => <ActivityEventRow key={e.id} event={e} agent={agent} />) : <OrbitEmptyState appearance={agent.appearance} compact title="Aucune activité" body={`Les actions de ${agent.name} apparaîtront ici en temps réel.`} />)}
           {current === 'memory' && <Memory agent={agent} />}
+          {current === 'files' && <Files agent={agent} />}
           {current === 'tools' && <Tools agent={agent} />}
           {current === 'stats' && <Stats agent={agent} />}
           {current === 'config' && <Config agent={agent} />}
@@ -401,19 +485,83 @@ export function CompanionProfilePage({ agentId, tab }: { agentId: string; tab?: 
               <div className="px-2 pb-2 text-[12.5px] text-fg-3">Aucun événement pour l’instant.</div>
             )}
           </section>
-          <section className="card p-3.5">
-            <div className="eyebrow mb-2 flex items-center gap-1.5"><ShieldCheck className="size-3" /> Permissions</div>
-            <div className="flex flex-wrap gap-1">
-              {(Object.keys(PERMISSION_LABELS) as (keyof AgentPermissions)[]).map((k) => (
-                <span key={k} className={cn('rounded-[6px] px-1.5 py-0.5 text-[11px]', agent.permissions[k] ? (PERMISSION_LABELS[k].sensitive ? 'bg-warning/10 text-warning' : 'bg-success/10 text-success') : 'bg-white/[0.04] text-fg-4 line-through decoration-fg-4/50')}>
-                  {PERMISSION_LABELS[k].label}
-                </span>
-              ))}
-            </div>
-          </section>
+          <TeamAndSchedule agent={agent} />
+          <EffectiveSummary agent={agent} />
         </aside>
       </div>
     </Page>
+  )
+}
+
+function TeamAndSchedule({ agent }: { agent: Agent }) {
+  const defs = useConstellations()
+  const automations = useAutomations()
+  const missions = useMissions(agent.id)
+  const mine = (defs.data ?? []).filter((d) => d.members.some((m) => m.agentId === agent.id))
+  const planned = (automations.data ?? []).filter((a) => a.status === 'active' && (a.targetId === agent.id || mine.some((d) => d.id === a.targetId)))
+  const sessions = (missions.data ?? []).filter((m) => m.sessionId && ACTIVE_MISSION_STATUSES.includes(m.status)).length
+  const resumable = (missions.data ?? []).filter((m) => m.sessionId).length
+  if (!mine.length && !planned.length && !resumable) return null
+  return (
+    <section className="card space-y-3 p-3.5 text-[12.5px]">
+      {mine.length > 0 && (
+        <div>
+          <div className="eyebrow mb-1.5">Constellations</div>
+          {mine.map((d) => (
+            <button key={d.id} onClick={() => navigate('/constellations')} className="flex w-full items-center gap-2 py-0.5 text-left text-fg-2 hover:text-fg">
+              <Waypoints className="size-3.5 text-accent" />
+              <span className="flex-1 truncate">{d.name}</span>
+              <span className="text-2xs text-fg-3">{d.coordinatorAgentId === agent.id ? 'coordination' : d.members.find((m) => m.agentId === agent.id)?.role}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {planned.length > 0 && (
+        <div>
+          <div className="eyebrow mb-1.5">Missions planifiées</div>
+          {planned.slice(0, 4).map((a) => (
+            <button key={a.id} onClick={() => navigate('/automations')} className="flex w-full items-center gap-2 py-0.5 text-left text-fg-2 hover:text-fg">
+              <CalendarClock className="size-3.5 text-fg-3" />
+              <span className="flex-1 truncate">{a.name}</span>
+              <span className="text-2xs text-fg-3">{relative(a.nextRunAt)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {resumable > 0 && (
+        <div className="flex justify-between text-fg-3">
+          <span>Sessions</span>
+          <span className="text-fg-2 tabular">{sessions} active{sessions > 1 ? 's' : ''} · {resumable} reprenable{resumable > 1 ? 's' : ''}</span>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function EffectiveSummary({ agent }: { agent: Agent }) {
+  const security = useSecurity()
+  const rows = effectivePermissions(agent, { isolationProven: Boolean(security.data?.isolation.ok) })
+  return (
+    <section className="card p-3.5">
+      <button onClick={() => navigate(`/companions/${agent.id}/tools`)} className="eyebrow mb-2 flex w-full items-center gap-1.5 hover:text-fg-2">
+        <ShieldCheck className="size-3" /> Permissions effectives
+      </button>
+      <div className="flex flex-wrap gap-1">
+        {rows.map((r) => (
+          <span
+            key={r.key}
+            title={r.detail}
+            className={cn(
+              'rounded-[6px] px-1.5 py-0.5 text-[11px]',
+              r.effective === 'allowed' ? 'bg-success/10 text-success' : r.effective === 'ask' ? 'bg-warning/10 text-warning' : r.effective === 'partial' ? 'bg-accent-2/10 text-accent-2' : 'bg-white/[0.04] text-fg-4',
+            )}
+          >
+            {r.label}
+            {r.effective === 'ask' ? ' · accord' : r.effective === 'partial' ? ' · partiel' : r.effective === 'denied' ? ' · bloqué' : ''}
+          </span>
+        ))}
+      </div>
+    </section>
   )
 }
 

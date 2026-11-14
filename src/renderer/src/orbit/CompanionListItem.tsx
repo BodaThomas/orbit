@@ -60,10 +60,17 @@ export function CompanionListItem({ agent, selected }: { agent: Agent; selected:
       <ContextMenuTrigger asChild>
         <div
           role="button"
+          data-companion-item
           tabIndex={0}
+          aria-label={`${agent.name}, ${subtitle}`}
           aria-current={selected ? 'page' : undefined}
           onClick={() => navigate(`/chat/${agent.id}`)}
-          onKeyDown={(e) => e.key === 'Enter' && navigate(`/chat/${agent.id}`)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              navigate(`/chat/${agent.id}`)
+            }
+          }}
           className={cn(
             'group relative flex h-[50px] items-center gap-3 rounded-[11px] px-2.5 outline-none transition-colors',
             selected ? 'bg-surface' : 'hover:bg-white/[0.03] focus-visible:bg-white/[0.04]',

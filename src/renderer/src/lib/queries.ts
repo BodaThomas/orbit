@@ -18,14 +18,18 @@ const SCOPE_KEYS: Record<Exclude<InvalidateScope, 'all'>, string[]> = {
   providers: ['providers'],
   health: ['health'],
   conversations: ['conversations', 'messages', 'search'],
-  missions: ['missions', 'mission'],
-  approvals: ['approvals'],
+  missions: ['missions', 'mission', 'agents', 'files'],
+  approvals: ['approvals', 'agents'],
   activity: ['activity'],
   usage: ['usage'],
   notifications: ['notifications'],
   memory: ['memory'],
-  settings: ['bootstrap'],
+  settings: ['bootstrap', 'security'],
   workflows: ['workflows'],
+  constellations: ['constellations', 'constellation-run', 'missions'],
+  automations: ['automations'],
+  machines: ['machines', 'runtime'],
+  security: ['security'],
 }
 
 /** Wires main-process push events into the query cache and the UI store. */
@@ -67,6 +71,9 @@ export function useOrbitEvents(): void {
         case 'navigate':
           navigate(evt.route)
           break
+        case 'constellation.signal':
+          useUi.getState().pushSignal(evt.signal)
+          break
         case 'activity':
           break
       }
@@ -98,11 +105,21 @@ export const useApprovals = () => useOrbitQuery(['approvals', 'pending'], 'appro
 export const useActivity = (opts: { agentId?: string; query?: string; level?: ActivityLevel; limit?: number } = {}) =>
   useOrbitQuery(['activity', opts], 'activity.list', opts)
 export const useUsage = () => useOrbitQuery(['usage'], 'usage.summary')
+export const useLocalClaude = () => useOrbitQuery(['usage', 'localClaude'], 'usage.localClaude')
+export const useQuotas = () => useOrbitQuery(['usage', 'quotas'], 'usage.quotas')
 export const useNotifications = () => useOrbitQuery(['notifications'], 'notifications.list')
 export const useMemory = (agentId: string | undefined) => useOrbitQuery(['memory', agentId], 'memory.list', { agentId: agentId ?? '' }, Boolean(agentId))
 export const useMachines = () => useOrbitQuery(['machines'], 'machines.list')
 export const useWorkflows = () => useOrbitQuery(['workflows'], 'workflows.list')
 export const useAudit = () => useOrbitQuery(['audit'], 'audit.list', { limit: 200 })
+export const useConstellations = () => useOrbitQuery(['constellations', 'defs'], 'constellations.list')
+export const useConstellationRuns = (constellationId?: string) => useOrbitQuery(['constellations', 'runs', constellationId ?? 'all'], 'constellations.runs', { constellationId })
+export const useConstellationRun = (id: string | undefined) => useOrbitQuery(['constellation-run', id], 'constellations.run', { id: id ?? '' }, Boolean(id))
+export const useAutomations = () => useOrbitQuery(['automations', 'list'], 'automations.list')
+export const useAutomationRuns = (automationId?: string) => useOrbitQuery(['automations', 'runs', automationId ?? 'all'], 'automations.runs', { automationId })
+export const useRemoteMachines = () => useOrbitQuery(['machines', 'remote'], 'runtime.list')
+export const useSecurity = () => useOrbitQuery(['security'], 'security.status')
+export const useRecentFiles = (agentId?: string) => useOrbitQuery(['files', agentId ?? 'all'], 'files.recent', { agentId, limit: 200 })
 
 /** Mutation helper: calls the bridge, toasts errors, optional success toast. */
 export function useAction<C extends IpcChannel>(channel: C, opts: { success?: string | ((out: IpcOutputs[C]) => string); onSuccess?: (out: IpcOutputs[C]) => void } = {}) {

@@ -1,7 +1,10 @@
 import { COMPANION_PRESETS, DEFAULT_PERMISSIONS } from '@shared/catalog'
 import type { OrbitEvent } from '@shared/ipc'
 import type { ProviderId } from '@shared/types'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { AgentRunner } from '../src/main/core/agent-runner'
+import { ConstellationEngine } from '../src/main/core/constellations/engine'
 import { AgentManager } from '../src/main/core/agents'
 import type { AgentEngine, EngineId } from '../src/main/core/engine/types'
 import { ConversationManager } from '../src/main/core/conversations'
@@ -64,7 +67,8 @@ export function makeCore(adapter: ProviderAdapter = fakeAdapter(), engines: Part
   const conversations = new ConversationManager(db, bus, journal, agents, providers, usage, permissions, memory)
   const runner = new AgentRunner(db, bus, journal, agents, usage)
   const missions = new MissionManager(db, bus, journal, agents, providers, usage, permissions, memory, runner)
-  return { handle, db, bus, events, notified, settings, journal, agents, providers, usage, permissions, memory, conversations, missions, runner }
+  const constellations = new ConstellationEngine(db, bus, journal, agents, missions, providers, join(tmpdir(), `orbit-wt-${Date.now()}`))
+  return { handle, db, bus, events, notified, settings, journal, agents, providers, usage, permissions, memory, conversations, missions, runner, constellations }
 }
 
 export function novaInput(overrides: Partial<Parameters<AgentManager['create']>[0]> = {}) {

@@ -7,8 +7,10 @@ import { Kbd } from '@/components/ui/field'
 import { Skeleton } from '@/components/ui/field'
 import { longDate, greeting, relative, money, moneyParts, integer } from '@/lib/format'
 import { cn } from '@/lib/cn'
+import { useCompanionStates } from '@/lib/companion-state'
 import { useActivity, useAgents, useApprovals, useBootstrap, useMissions, useProviders, useUsage } from '@/lib/queries'
 import { ActivityEventRow } from '@/orbit/ActivityEvent'
+import { OverviewMotion } from '@/orbit/OverviewMotion'
 import { ApprovalRequestCard } from '@/orbit/ApprovalRequest'
 import { CompanionAvatar } from '@/orbit/CompanionAvatar'
 import { CompanionCard } from '@/orbit/CompanionCard'
@@ -65,11 +67,13 @@ export function OverviewPage() {
   const list = agents.data ?? []
   const active = list.filter((a) => ['working', 'awaiting_approval', 'error', 'done'].includes(a.status))
   const featured = (active.length ? [...active, ...list.filter((a) => !active.includes(a))] : list).slice(0, 4)
-  const workingAgents = list.filter((a) => a.status === 'working' || a.status === 'awaiting_approval')
-  const working = list.filter((a) => a.status === 'working').length
+  // Same rules as every other screen (shared/stats.ts).
+  const team = useCompanionStates()
+  const workingAgents = list.filter((a) => ['in_mission', 'awaiting_approval'].includes(team.stateOf(a.id)))
+  const working = team.counts.inMission
   const failing = (missions.data ?? []).filter((m) => m.status === 'failed').slice(0, 3)
   const recent = (missions.data ?? []).slice(0, 5)
-  const running = (missions.data ?? []).filter((m) => ACTIVE_MISSION_STATUSES.includes(m.status)).length
+  const running = team.missions.active
   const currentMission = (agentId: string) => (missions.data ?? []).find((m) => m.agentId === agentId && ACTIVE_MISSION_STATUSES.includes(m.status))
   const pendingApprovals = approvals.data?.length ?? 0
   const todo = pendingApprovals + failing.length
@@ -128,7 +132,14 @@ export function OverviewPage() {
       ) : (
         <>
           <section className="card mb-6 grid grid-cols-4 divide-x divide-line" aria-label="En un coup d’œil">
-            <PulseCell label="Occupés" foot={workingAgents.length ? workingAgents.map((a) => a.name).join(', ') : 'Personne n’est occupé'}>
+            <PulseCell
+              label="Occupés"
+              foot={
+                workingAgents.length
+                  ? [team.counts.inMission && `${team.counts.inMission} en mission`, team.counts.awaitingApproval && `${team.counts.awaitingApproval} attend${team.counts.awaitingApproval > 1 ? 'ent' : ''} votre accord`].filter(Boolean).join(' · ')
+                  : 'Personne n’est occupé'
+              }
+            >
               <span className="text-[22px] leading-7 font-semibold tracking-[-0.02em] text-fg tabular">
                 {workingAgents.length}
                 <span className="text-[14px] font-normal text-fg-3"> / {list.length}</span>
@@ -163,6 +174,7 @@ export function OverviewPage() {
             </PulseCell>
           </section>
 
+          <OverviewMotion />
           <div className="mb-2.5 flex items-center justify-between">
             <h2 className="text-[13px] font-medium text-fg-2">{active.length ? 'Compagnons actifs' : 'Vos compagnons'}</h2>
             <PanelLink onClick={() => navigate('/universe')}>Voir mon univers</PanelLink>

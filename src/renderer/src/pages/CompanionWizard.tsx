@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, FolderOpen, Laptop, Lock, ShieldCheck, Sparkles, Wand2, Zap } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, FolderOpen, Laptop, Lock, Server, ShieldCheck, Sparkles, Wand2, Zap } from 'lucide-react'
 import { COMPANION_PRESETS, DEFAULT_PERMISSIONS, EXPRESSIONS, PALETTE_IDS, PALETTES, PERMISSION_LABELS, SPECIES, TEXTURES } from '@shared/catalog'
+import { EFFORT_LEVELS, isAgentEngine } from '@shared/engines'
 import type { AgentInput } from '@shared/ipc'
 import type { AgentPermissions, Appearance, AutonomyLevel, PaletteId, ProviderInfo } from '@shared/types'
 import { Page } from '@/components/shell/Page'
@@ -8,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Badge, Input, Label, Switch, Textarea } from '@/components/ui/field'
 import { call } from '@/lib/api'
 import { cn } from '@/lib/cn'
-import { useAction, useAgent, useProviders } from '@/lib/queries'
+import { useAction, useAgent, useProviders, useRemoteMachines, useSecurity } from '@/lib/queries'
 import { Companion } from '@/orbit/Companion'
 import { CompanionAvatar } from '@/orbit/CompanionAvatar'
 import { Planet } from '@/orbit/Planet'
@@ -43,6 +44,10 @@ function initialDraft(): AgentInput {
     permissions: { ...DEFAULT_PERMISSIONS },
     workingDirectory: null,
     dailyBudgetUsd: null,
+    isolation: 'standard',
+    effort: null,
+    runtime: 'local',
+    machineId: null,
   }
 }
 
@@ -131,6 +136,8 @@ function Preview({ draft }: { draft: AgentInput }) {
 export function CompanionWizardPage({ agentId }: { agentId?: string }) {
   const existing = useAgent(agentId)
   const providers = useProviders()
+  const security = useSecurity()
+  const remoteMachines = useRemoteMachines()
   const [step, setStep] = useState(0)
   const [draft, setDraft] = useState<AgentInput>(initialDraft)
   const [loaded, setLoaded] = useState(!agentId)
@@ -139,7 +146,7 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
   useEffect(() => {
     if (agentId && existing.data && !loaded) {
       const a = existing.data
-      setDraft({ name: a.name, role: a.role, description: a.description, appearance: a.appearance, providerId: a.providerId, model: a.model, instructions: a.instructions, autonomy: a.autonomy, permissions: a.permissions, workingDirectory: a.workingDirectory, dailyBudgetUsd: a.dailyBudgetUsd })
+      setDraft({ name: a.name, role: a.role, description: a.description, appearance: a.appearance, providerId: a.providerId, model: a.model, instructions: a.instructions, autonomy: a.autonomy, permissions: a.permissions, workingDirectory: a.workingDirectory, dailyBudgetUsd: a.dailyBudgetUsd, isolation: a.isolation, effort: a.effort as AgentInput['effort'], runtime: a.runtime, machineId: a.machineId })
       setLoaded(true)
     }
   }, [agentId, existing.data, loaded])
@@ -386,6 +393,25 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
                   <Input value={draft.model} onChange={(e) => set('model', e.target.value)} placeholder="identifiant-du-modèle" />
                 )}
               </div>
+              {isAgentEngine(draft.providerId) && (
+                <div>
+                  <Label hint="Plus d’effort : réponses plus réfléchies, plus de jetons">Effort de raisonnement</Label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[{ id: null, label: 'Par défaut' }, ...EFFORT_LEVELS].map((e) => (
+                      <button
+                        key={e.id ?? 'default'}
+                        type="button"
+                        aria-pressed={draft.effort === e.id}
+                        onClick={() => set('effort', e.id as AgentInput['effort'])}
+                        className={cn('h-8 rounded-[9px] px-3 text-[12.5px]', draft.effort === e.id ? 'bg-accent/[0.09] text-fg shadow-[inset_0_0_0_1.5px_rgb(165_155_250/0.6)]' : 'bg-white/[0.025] text-fg-2 shadow-[inset_0_0_0_1px_var(--color-line)] hover:bg-white/[0.05]')}
+                      >
+                        {e.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="mt-1.5 text-2xs text-fg-4">Transmis tel quel au moteur. Si le modèle ne le prend pas en charge, la mission échoue avec un message clair : aucun repli silencieux.</p>
+                </div>
+              )}
               <div>
                 <Label hint="Envoyées à chaque échange">Instructions permanentes</Label>
                 <Textarea className="min-h-36" value={draft.instructions} onChange={(e) => set('instructions', e.target.value)} placeholder={`Tu es ${draft.name || 'un compagnon'}…`} />
@@ -441,9 +467,10 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
                 <div>
                   <Label hint={provider?.capabilities.kind === 'agent' ? 'Requis : seul dossier accessible' : undefined}>Dossier autorisé</Label>
                   <div className="flex gap-2">
-                    <Input readOnly value={draft.workingDirectory ?? ''} placeholder="Aucun" className="text-fg-2" />
+                    <Input readOnly value={draft.runtime === 'remote' ? `Sur la machine distante : projects/${draft.workingDirectory ?? ''}` : (draft.workingDirectory ?? '')} placeholder="Aucun" className="text-fg-2" disabled={draft.runtime === 'remote'} />
                     <Button
                       variant="secondary"
+                      disabled={draft.runtime === 'remote'}
                       onClick={async () => {
                         const dir = await call('app.chooseDirectory')
                         if (dir) set('workingDirectory', dir)
@@ -469,13 +496,44 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
                   </div>
                 </div>
               </div>
-              <div>
-                <Label>Environnement d’exécution</Label>
-                <div className="flex items-center gap-3 rounded-[11px] bg-white/[0.025] px-3.5 py-3 shadow-[inset_0_0_0_1px_var(--color-line)]">
-                  <Laptop className="size-4 text-fg-2" />
-                  <span className="flex-1 text-[13px] text-fg">Ce Mac</span>
-                  <span className="text-xs text-fg-3">Machines distantes : bientôt</span>
+              {isAgentEngine(draft.providerId) && (
+                <div>
+                  <Label hint="Niveau 3 · bloque les lectures hors du projet">Isolation renforcée</Label>
+                  <div className="flex items-start gap-3 rounded-[11px] bg-white/[0.025] px-3.5 py-3 shadow-[inset_0_0_0_1px_var(--color-line)]">
+                    <ShieldCheck className={cn('mt-0.5 size-4', draft.isolation === 'strict' ? 'text-success' : 'text-fg-3')} />
+                    <span className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-fg-3">
+                      <span className="block text-[13px] text-fg">Confiner tout le moteur au dossier du projet</span>
+                      Le noyau macOS refuse à {draft.name || 'ce compagnon'} et à toutes ses commandes la lecture de votre dossier personnel hors du projet (clés SSH, .env d’autres projets…).
+                      {security.data && !security.data.isolation.ok && <span className="mt-1 block text-warning">Indisponible : l’auto-test de confinement n’a pas réussi sur ce Mac.</span>}
+                      {security.data?.isolation.ok && <span className="mt-1 block text-fg-4">Auto-test réussi le {new Date(security.data.isolation.checkedAt!).toLocaleString('fr-FR')}. Le dossier de connexion du moteur reste lisible.</span>}
+                    </span>
+                    <Switch checked={draft.isolation === 'strict'} disabled={!security.data?.isolation.ok} onChange={(v) => set('isolation', v ? 'strict' : 'standard')} label="Isolation renforcée" />
+                  </div>
                 </div>
+              )}
+              <div>
+                <Label hint={isAgentEngine(draft.providerId) ? 'Une machine distante travaille même Mac éteint' : 'Moteurs agents uniquement'}>Environnement d’exécution</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button type="button" aria-pressed={draft.runtime === 'local'} onClick={() => setDraft((d) => ({ ...d, runtime: 'local', machineId: null, workingDirectory: d.runtime === 'remote' ? null : d.workingDirectory }))} className={cn('flex items-center gap-3 rounded-[11px] px-3.5 py-3 text-left', draft.runtime === 'local' ? 'bg-accent/[0.09] shadow-[inset_0_0_0_1.5px_rgb(165_155_250/0.6)]' : 'bg-white/[0.025] shadow-[inset_0_0_0_1px_var(--color-line)] hover:bg-white/[0.05]')}>
+                    <Laptop className="size-4 text-fg-2" />
+                    <span className="flex-1 text-[13px] text-fg">Ce Mac</span>
+                  </button>
+                  {(remoteMachines.data ?? []).map((m) => (
+                    <button key={m.id} type="button" disabled={!isAgentEngine(draft.providerId)} aria-pressed={draft.machineId === m.id} onClick={() => setDraft((d) => ({ ...d, runtime: 'remote', machineId: m.id, isolation: 'standard', workingDirectory: d.runtime === 'remote' ? d.workingDirectory : 'projet' }))} className={cn('flex items-center gap-3 rounded-[11px] px-3.5 py-3 text-left disabled:opacity-45', draft.machineId === m.id ? 'bg-accent/[0.09] shadow-[inset_0_0_0_1.5px_rgb(165_155_250/0.6)]' : 'bg-white/[0.025] shadow-[inset_0_0_0_1px_var(--color-line)] enabled:hover:bg-white/[0.05]')}>
+                      <Server className="size-4 text-fg-2" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] text-fg">{m.name}</span>
+                        <span className="block truncate text-2xs text-fg-3">{m.status === 'online' ? 'En ligne' : 'Hors ligne'}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                {draft.runtime === 'remote' && (
+                  <div className="mt-2">
+                    <Label hint="Dossier sous projects/ sur la machine">Projet distant</Label>
+                    <Input value={draft.workingDirectory ?? ''} onChange={(e) => set('workingDirectory', e.target.value.replace(/[^A-Za-z0-9._-]/g, ''))} className="font-mono" maxLength={64} />
+                  </div>
+                )}
               </div>
             </div>
           )}

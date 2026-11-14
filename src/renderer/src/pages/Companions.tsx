@@ -1,3 +1,4 @@
+import { ENGINE_INFO } from '@shared/engines'
 import { useMemo, useState } from 'react'
 import { MessageCircle, MoreHorizontal, Plus, Rocket } from 'lucide-react'
 import { ACTIVE_MISSION_STATUSES } from '@shared/mission-states'
@@ -139,7 +140,7 @@ export function CompanionsPage() {
                 </div>
                 <div className="mt-3 flex items-center gap-2 px-3.5 text-[12px] text-fg-3">
                   <ProviderMark id={a.providerId} size={15} />
-                  <span className="min-w-0 truncate text-fg-2">{p?.models.find((x) => x.id === a.model)?.label ?? a.model}</span>
+                  <span className="min-w-0 truncate text-fg-2" title={ENGINE_INFO[a.providerId].connection}>{ENGINE_INFO[a.providerId].label}<span className="text-fg-3"> · {p?.models.find((x) => x.id === a.model)?.label ?? a.model}</span></span>
                   <span className="ml-auto shrink-0 rounded-[5px] bg-white/[0.05] px-1.5 text-[11px] leading-[18px] text-fg-2">{AUTONOMY[a.autonomy]}</span>
                 </div>
                 <div className="mt-3 grid grid-cols-2 border-t border-line text-[11.5px]">

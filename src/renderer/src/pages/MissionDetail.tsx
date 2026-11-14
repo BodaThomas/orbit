@@ -27,7 +27,7 @@ import {
   Wrench,
   X,
 } from 'lucide-react'
-import type { Agent, ExecutionEvent, FileChange, LiveActivity, Mission, MissionExecution, ToolCall, ToolKind } from '@shared/types'
+import type { Agent, ExecutionEvent, FileChange, FileInventory, LiveActivity, Mission, MissionExecution, ToolCall, ToolKind } from '@shared/types'
 import { Page } from '@/components/shell/Page'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/field'
@@ -260,19 +260,29 @@ function FollowUp({ mission, agent }: { mission: Mission; agent: Agent }) {
 
 // Files
 
-function FilesPanel({ changes, workspace }: { changes: FileChange[]; workspace: string | null }) {
+function FilesPanel({ changes, workspace, inventories }: { changes: FileChange[]; workspace: string | null; inventories: FileInventory[] }) {
   const [openPath, setOpenPath] = useState<string | null>(null)
   const byPath = useMemo(() => {
     const m = new Map<string, FileChange[]>()
     for (const c of changes) m.set(c.path, [...(m.get(c.path) ?? []), c])
     return [...m]
   }, [changes])
-  if (!byPath.length) return null
+  const last = inventories.at(-1)
+  if (!byPath.length && !last) return null
+  const incomplete = inventories.filter((i) => !i.complete)
   return (
     <section className="rounded-xl bg-surface ring-1 ring-line">
       <div className="flex h-10 items-center justify-between px-4 text-xs font-medium text-fg-3">
         Fichiers modifiés <span className="tabular text-fg-4">{byPath.length}</span>
       </div>
+      {last && (
+        <div className={cn('mx-3 mb-2 rounded-[8px] px-2.5 py-1.5 text-2xs leading-relaxed', incomplete.length ? 'bg-warning/[0.06] text-warning/90' : 'bg-white/[0.025] text-fg-3')}>
+          {last.method === 'git' ? 'Instantanés Git avant/après (index et stash intacts)' : last.method === 'scan' ? 'Empreintes du dossier avant/après' : 'Liste fournie par le moteur'}
+          {incomplete.length ? ' · inventaire non exhaustif : ' : ' · inventaire complet pour ce dossier.'}
+          {incomplete.length > 0 && <span className="text-fg-3">{[...new Set(incomplete.map((i) => i.note).filter(Boolean))].join(' ')}</span>}
+        </div>
+      )}
+      {!byPath.length && <div className="px-4 pb-3 text-[12px] text-fg-3">Aucun fichier modifié pendant cette mission.</div>}
       <ul className="px-2 pb-2">
         {byPath.map(([path, list]) => {
           const last = list.at(-1)!
@@ -283,9 +293,11 @@ function FilesPanel({ changes, workspace }: { changes: FileChange[]; workspace: 
               <button onClick={() => setOpenPath(openPath === path ? null : path)} className="flex w-full items-center gap-2 rounded-[8px] px-2 py-1.5 text-left hover:bg-white/[0.04]" aria-expanded={openPath === path}>
                 <Icon className="size-3.5 shrink-0 text-accent-2" />
                 <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-fg-2" title={path}>{rel(workspace, path)}</span>
+                {last.source !== 'engine' && <span className="text-2xs text-fg-4" title="Détecté par instantané (commande shell, script…)">shell</span>}
+                <span className="text-2xs text-fg-4 tabular">{clock(last.createdAt)}</span>
                 {list.length > 1 && <span className="text-2xs text-fg-4 tabular">×{list.length}</span>}
               </button>
-              {openPath === path && <div className="px-2 pb-2">{diff ? <DiffView diff={diff} /> : <div className="text-2xs text-fg-4">Le moteur n’a pas fourni de diff pour ce fichier.</div>}</div>}
+              {openPath === path && <div className="px-2 pb-2">{diff ? <DiffView diff={diff} /> : <div className="text-2xs text-fg-4">Diff indisponible (fichier binaire, volumineux ou supprimé).</div>}</div>}
             </li>
           )
         })}
@@ -296,7 +308,7 @@ function FilesPanel({ changes, workspace }: { changes: FileChange[]; workspace: 
 
 // Page
 
-export function MissionDetailPage({ missionId }: { missionId: string }) {
+export function MissionDetailPage({ missionId, focusApproval }: { missionId: string; focusApproval?: string | null }) {
   const q = useMission(missionId)
   const live = useUi((s) => s.liveMissionEvents[missionId])
   const activity = useUi((s) => s.missionActivity[missionId])
@@ -327,7 +339,7 @@ export function MissionDetailPage({ missionId }: { missionId: string }) {
 
   if (q.isLoading) return null
   if (!mission || !q.data) return <Page><OrbitEmptyState title="Mission introuvable" /></Page>
-  const { executions, toolCalls, fileChanges } = q.data
+  const { executions, toolCalls, fileChanges, inventories } = q.data
   const pending = approvals.data?.filter((a) => a.missionId === mission.id) ?? []
   const engine = mission.engine ? providers.data?.find((p) => p.id === mission.engine) : null
   const streamed = events.filter((e) => e.type === 'output').map((e) => e.message).join('')
@@ -383,7 +395,11 @@ export function MissionDetailPage({ missionId }: { missionId: string }) {
 
       <div className="grid grid-cols-[minmax(0,1fr)_340px] gap-5">
         <div className="min-w-0 space-y-4">
-          {pending.map((a) => <ApprovalRequestCard key={a.id} approval={a} agent={agent} expanded />)}
+          {pending.map((a) => (
+            <div key={a.id} ref={a.id === focusApproval ? (el) => el?.scrollIntoView({ block: 'center', behavior: 'smooth' }) : undefined} className={cn('rounded-[12px]', a.id === focusApproval && 'ring-2 ring-warning/50')}>
+              <ApprovalRequestCard approval={a} agent={agent} expanded />
+            </div>
+          ))}
 
           {mission.description && (
             <section className="rounded-xl bg-surface p-5 ring-1 ring-line">
@@ -489,7 +505,7 @@ export function MissionDetailPage({ missionId }: { missionId: string }) {
             )}
           </section>
 
-          <FilesPanel changes={fileChanges} workspace={mission.workspace} />
+          <FilesPanel changes={fileChanges} workspace={mission.workspace} inventories={inventories} />
 
           {!mission.engine && events.length > 0 && (
             <section className="rounded-xl bg-surface ring-1 ring-line">

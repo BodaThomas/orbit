@@ -5,6 +5,7 @@ import { cn } from '@/lib/cn'
 const MARKS: Record<ProviderId, { glyph: string; bg: string; fg: string }> = {
   anthropic: { glyph: 'A', bg: '#3a2620', fg: '#E8957A' },
   openai: { glyph: 'O', bg: '#1f2a26', fg: '#9ED9C0' },
+  'claude-code': { glyph: 'Cc', bg: '#3a2620', fg: '#F2B49C' },
   'claude-agent': { glyph: 'Ag', bg: '#3a2620', fg: '#E8957A' },
   codex: { glyph: 'Cx', bg: '#1f2a26', fg: '#9ED9C0' },
   gemini: { glyph: 'G', bg: '#1f2433', fg: '#9DB4E8' },

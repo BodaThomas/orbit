@@ -19,7 +19,7 @@ function scriptedEngine(id: 'codex' | 'claude-agent', script: Script) {
   const engine: AgentEngine = {
     id,
     name: id === 'codex' ? 'Codex' : 'Claude Agent SDK',
-    capabilities: { resume: true, approvals: true, interrupt: true, fileDiffs: true, budgetCap: id === 'claude-agent', usage: 'official' },
+    capabilities: { resume: true, approvals: true, interrupt: true, fileDiffs: true, budgetCap: id === 'claude-agent', usage: 'official', confinable: true, effort: false },
     checkReady: async () => ({ ready: true, detail: 'ok', auth: 'subscription' }),
     run: async (req, io) => {
       requests.push(req)
@@ -77,7 +77,7 @@ describe('agent missions (engine + runner + persistence)', () => {
     const approval = pendingToolApprovals(core)[0]!
     expect(approval.payload).toMatchObject({ kind: 'edit', diff: '+x' })
     expect(core.missions.detail(m.id).toolCalls.find((t) => t.externalId === 'f1')?.status).toBe('awaiting_approval')
-    expect(core.notified).toContain('Atlas attend votre accord')
+    expect(core.notified).toContain('Atlas demande votre accord')
 
     core.missions.resolveApproval(approval.id, true)
     await waitFor(() => core.missions.get(m.id).status === 'done')

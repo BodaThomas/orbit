@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ExecutionEvent, LiveActivity } from '@shared/types'
+import type { ConstellationSignal, ExecutionEvent, LiveActivity } from '@shared/types'
 
 interface UiState {
   paletteOpen: boolean
@@ -20,7 +20,12 @@ interface UiState {
   /** What each companion is doing right now, from engine events only. */
   missionActivity: Record<string, LiveActivity | null>
   setMissionActivity: (missionId: string, activity: LiveActivity | null) => void
+  /** Real constellation events (delegation, result…), newest last. Drives link pulses. */
+  signals: (ConstellationSignal & { seq: number })[]
+  pushSignal: (s: ConstellationSignal) => void
 }
+
+let signalSeq = 0
 
 export const useUi = create<UiState>((set) => ({
   paletteOpen: false,
@@ -47,4 +52,6 @@ export const useUi = create<UiState>((set) => ({
   clearMissionDraft: (id) => set((s) => ({ missionDrafts: { ...s.missionDrafts, [id]: '' } })),
   missionActivity: {},
   setMissionActivity: (id, activity) => set((s) => ({ missionActivity: { ...s.missionActivity, [id]: activity } })),
+  signals: [],
+  pushSignal: (sig) => set((s) => ({ signals: [...s.signals.slice(-49), { ...sig, seq: ++signalSeq }] })),
 }))
