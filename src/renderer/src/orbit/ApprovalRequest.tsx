@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { Check, ChevronRight, Infinity as InfinityIcon, Rocket, ShieldAlert, X } from 'lucide-react'
+import { Check, ChevronRight, Infinity as InfinityIcon, Rocket, Server, ShieldAlert, X } from 'lucide-react'
 import { CATEGORY_LABELS, SENSITIVE_CATEGORIES } from '@shared/permission-labels'
 import type { Agent, ApprovalRequest as A } from '@shared/types'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/cn'
 import { relative } from '@/lib/format'
 import { useAction } from '@/lib/queries'
+import { useRemoteState } from './RemoteMission'
 import { Tooltip } from '@/components/ui/overlay'
 import { navigate } from '@/stores/router'
 import { CompanionAvatar } from './CompanionAvatar'
@@ -42,7 +43,9 @@ export function DiffView({ diff, className }: { diff: string; className?: string
 }
 
 export function ApprovalRequestCard({ approval, agent, expanded = false }: { approval: A; agent?: Agent; expanded?: boolean }) {
-  const resolve = useAction('approvals.resolve', { success: (a) => (a.status === 'approved' ? 'Demande approuvée' : 'Demande refusée') })
+  const remote = useRemoteState(approval.machineId)
+  const resolve = useAction('approvals.resolve', { success: (a) => (a.machineId ? `Réponse envoyée à ${remote.machine?.name ?? 'la machine'} : elle s’applique dès qu’elle la confirme` : a.status === 'approved' ? 'Demande approuvée' : 'Demande refusée') })
+  const blocked = resolve.isPending || (Boolean(approval.machineId) && !remote.online)
   const [open, setOpen] = useState(expanded)
   const p = approval.payload
   const grant = p?.grant
@@ -64,6 +67,12 @@ export function ApprovalRequestCard({ approval, agent, expanded = false }: { app
             {approval.summary}
           </button>
           {approval.detail && <div className="mt-0.5 text-xs text-fg-3">{approval.detail}</div>}
+          {approval.machineId && (
+            <div className="mt-1 flex items-center gap-1.5 text-xs text-fg-3">
+              <Server className="size-3" /> L’opération attend sur {remote.machine?.name ?? 'une machine distante'}
+              {!remote.online && <span className="text-warning">· hors ligne : reconnectez-la pour répondre</span>}
+            </div>
+          )}
 
           {hasDetail && (
             <div className="mt-2">
@@ -95,24 +104,24 @@ export function ApprovalRequestCard({ approval, agent, expanded = false }: { app
           )}
 
           <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-            <Button size="xs" variant="success" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: approval.id, approve: true, scope: 'once' })}>
+            <Button size="xs" variant="success" disabled={blocked} onClick={() => resolve.mutate({ id: approval.id, approve: true, scope: 'once' })}>
               <Check /> {approval.kind === 'tool_use' ? 'Autoriser une fois' : 'Approuver'}
             </Button>
             {canMission && (
               <Tooltip content={`${grant!.label} — jusqu’à la fin de cette mission`}>
-                <Button size="xs" variant="secondary" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: approval.id, approve: true, scope: 'mission' })}>
+                <Button size="xs" variant="secondary" disabled={blocked} onClick={() => resolve.mutate({ id: approval.id, approve: true, scope: 'mission' })}>
                   <Rocket /> Pour cette mission
                 </Button>
               </Tooltip>
             )}
             {canAlways && (
               <Tooltip content={`${grant!.label} — toujours, pour ce compagnon et ce dossier. Révocable dans Permissions.`}>
-                <Button size="xs" variant="secondary" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: approval.id, approve: true, scope: 'always' })}>
+                <Button size="xs" variant="secondary" disabled={blocked} onClick={() => resolve.mutate({ id: approval.id, approve: true, scope: 'always' })}>
                   <InfinityIcon /> Toujours
                 </Button>
               </Tooltip>
             )}
-            <Button size="xs" variant="ghost" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: approval.id, approve: false })}>
+            <Button size="xs" variant="ghost" disabled={blocked} onClick={() => resolve.mutate({ id: approval.id, approve: false })}>
               <X /> Refuser
             </Button>
             <span className="ml-auto text-2xs text-fg-3 tabular">{relative(approval.createdAt)}</span>

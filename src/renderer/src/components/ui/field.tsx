@@ -122,7 +122,7 @@ export function Segmented<T extends string>({ value, onChange, options, classNam
 /** Underlined tabs for page-level sections, with optional counts. */
 export function Tabs<T extends string>({ value, onChange, options, className }: { value: T; onChange: (v: T) => void; options: { value: T; label: React.ReactNode; count?: number | null; icon?: React.ReactNode }[]; className?: string }) {
   return (
-    <div role="tablist" className={cn('flex items-center gap-1 border-b border-line', className)}>
+    <div role="tablist" className={cn('flex items-center gap-1 overflow-x-auto border-b border-line [scrollbar-width:none]', className)}>
       {options.map((o) => {
         const active = value === o.value
         return (

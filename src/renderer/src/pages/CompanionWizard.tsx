@@ -524,11 +524,21 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
                       <Server className="size-4 text-fg-2" />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[13px] text-fg">{m.name}</span>
-                        <span className="block truncate text-2xs text-fg-3">{m.status === 'online' ? 'En ligne' : 'Hors ligne'}</span>
+                        <span className={cn('block truncate text-2xs', m.engines.find((e) => e.id === draft.providerId)?.available ? 'text-fg-3' : 'text-warning')}>
+                          {m.status === 'online' ? 'En ligne' : 'Hors ligne'} · {(() => {
+                            const e = m.engines.find((x) => x.id === draft.providerId)
+                            return !m.engines.length ? 'moteurs non détectés' : !e ? 'moteur absent' : e.available ? 'moteur prêt' : 'moteur non prêt'
+                          })()}
+                        </span>
                       </span>
                     </button>
                   ))}
                 </div>
+                {draft.runtime === 'remote' && (() => {
+                  const m = remoteMachines.data?.find((x) => x.id === draft.machineId)
+                  const e = m?.engines.find((x) => x.id === draft.providerId)
+                  return m && !e?.available ? <p className="mt-2 rounded-[10px] bg-warning/[0.05] px-3 py-2 text-[12px] text-warning ring-1 ring-warning/15">Ce moteur n’est pas prêt sur {m.name}{e ? ` : ${e.detail}` : ''}. Les missions y échoueront tant qu’il n’est pas installé et connecté sur le serveur. Orbit ne changera pas de moteur à votre place.</p> : null
+                })()}
                 {draft.runtime === 'remote' && (
                   <div className="mt-2">
                     <Label hint="Dossier sous projects/ sur la machine">Projet distant</Label>

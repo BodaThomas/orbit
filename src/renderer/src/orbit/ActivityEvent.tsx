@@ -1,4 +1,4 @@
-import { AlertTriangle, Ban, Bot, CalendarClock, CalendarX, Send, Server, ServerOff, Waypoints, CheckCircle2, FileText, KeyRound, MessageSquare, Play, Rocket, ShieldCheck, Square, Trash2, Wallet, Wrench, XCircle } from 'lucide-react'
+import { AlertTriangle, ArrowLeftRight, Ban, Bot, CalendarClock, CalendarX, Send, Server, ServerOff, Waypoints, CheckCircle2, FileText, KeyRound, MessageSquare, Play, Rocket, ShieldCheck, Square, Trash2, Wallet, Wrench, XCircle } from 'lucide-react'
 import type { ActivityEvent as Evt, Agent } from '@shared/types'
 import { Tooltip } from '@/components/ui/overlay'
 import { cn } from '@/lib/cn'
@@ -37,6 +37,10 @@ const ICONS: Record<Evt['type'], typeof Bot> = {
   'automation.skipped': CalendarX,
   'runtime.connected': Server,
   'runtime.disconnected': ServerOff,
+  'automation.paused': CalendarX,
+  'automation.transferred': ArrowLeftRight,
+  'runtime.paired': ShieldCheck,
+  'runtime.error': AlertTriangle,
 }
 
 const LEVEL = { info: 'text-fg-3', success: 'text-success', warning: 'text-warning', error: 'text-danger' }

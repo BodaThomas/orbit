@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, Crown, FileDiff, GitMerge, Play, RotateCcw, Square, Trash2, Waypoints } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Crown, FileDiff, GitMerge, Play, RotateCcw, Server, Square, Trash2, Waypoints } from 'lucide-react'
 import { effectivePermissions } from '@shared/permissions-matrix'
 import { ENGINE_INFO } from '@shared/engines'
 import type { Agent, ConstellationRunDetail, ConstellationTask } from '@shared/types'
@@ -18,6 +18,8 @@ import { MissionStatusIcon, MissionStatusLabel } from '@/orbit/MissionStatus'
 import { OrbitEmptyState } from '@/orbit/EmptyState'
 import { CompanionAvatar } from '@/orbit/CompanionAvatar'
 import { navigate } from '@/stores/router'
+import { Tooltip } from '@/components/ui/overlay'
+import { useRemoteState } from '@/orbit/RemoteMission'
 import { useUi } from '@/stores/ui'
 import { RUN_STATUS } from './Constellations'
 
@@ -238,6 +240,15 @@ function Workspaces({ detail, byId }: { detail: ConstellationRunDetail; byId: Ma
   )
 }
 
+function RunMachineBadge({ machineId }: { machineId: string }) {
+  const { machine, online, lastSyncedAt } = useRemoteState(machineId)
+  return (
+    <Tooltip content={online ? 'Coordonnée par le serveur, indépendamment de ce Mac.' : `Serveur injoignable : dernier état connu${lastSyncedAt ? `, synchronisé ${relative(lastSyncedAt)}` : ''}.`}>
+      <span><Badge tone={online ? 'neutral' : 'warning'}><Server className="size-3" /> {machine?.name ?? 'Serveur'}{online ? '' : ' · hors ligne'}</Badge></span>
+    </Tooltip>
+  )
+}
+
 export function ConstellationRunPage({ runId }: { runId: string }) {
   const q = useConstellationRun(runId)
   const agents = useAgents()
@@ -288,6 +299,7 @@ export function ConstellationRunPage({ runId }: { runId: string }) {
             <Waypoints className="size-5 text-accent" />
             <h1 className="truncate text-[22px] leading-8 font-semibold tracking-[-0.015em] text-fg">{run.constellationName}</h1>
             <Badge tone={RUN_STATUS[run.status].tone}>{RUN_STATUS[run.status].label}</Badge>
+            {run.machineId && <RunMachineBadge machineId={run.machineId} />}
           </div>
           <p className="mt-0.5 line-clamp-2 text-[13.5px] text-fg-2">{run.goal}</p>
           <div className="mt-1 flex flex-wrap gap-x-3 text-[12px] text-fg-3 tabular">

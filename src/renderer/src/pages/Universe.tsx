@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { LocateFixed, Minus, Plus, Rocket, Waypoints } from 'lucide-react'
+import { LocateFixed, Minus, Plus, Rocket, Server, Waypoints } from 'lucide-react'
 import { ACTIVE_MISSION_STATUSES } from '@shared/mission-states'
 import { PALETTES, STATUS_LABELS } from '@shared/catalog'
 import type { Agent, AgentStatus } from '@shared/types'
@@ -8,7 +8,7 @@ import { Kbd } from '@/components/ui/field'
 import { Tooltip } from '@/components/ui/overlay'
 import { cn } from '@/lib/cn'
 import { duration, relative } from '@/lib/format'
-import { useAgents, useAutomations, useConstellationRuns, useConstellations, useMissions } from '@/lib/queries'
+import { useAgents, useAutomations, useConstellationRuns, useConstellations, useMissions, useRemoteMachines } from '@/lib/queries'
 import { CompanionAvatar, statusColorClass } from '@/orbit/CompanionAvatar'
 import { OrbitEmptyState } from '@/orbit/EmptyState'
 import { navigate } from '@/stores/router'
@@ -66,6 +66,7 @@ export function UniversePage() {
   const activeRunDefs = new Set((runs.data ?? []).filter((r) => ['planning', 'running', 'synthesizing'].includes(r.status)).map((r) => r.constellationId))
   const workflows = { data: (defs.data ?? []).filter((d) => !d.isTemplate).map((d) => ({ id: d.id, name: d.name, coordinatorAgentId: d.coordinatorAgentId, memberAgentIds: d.members.map((m) => m.agentId), status: activeRunDefs.has(d.id) ? 'active' : 'done', missionId: null, createdAt: d.createdAt })) }
   const missions = useMissions()
+  const remoteMachines = useRemoteMachines()
   const root = useRef<HTMLDivElement>(null)
   const ref = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 1000, h: 700 })
@@ -341,6 +342,10 @@ export function UniversePage() {
                       <div className="flex items-center justify-center gap-1.5 text-[13.5px] font-medium text-fg [text-shadow:0_1px_8px_rgb(0_0_0/0.8)]">
                         <span className={cn('size-[6px] rounded-full', statusColorClass(agent.status), agent.status === 'awaiting_approval' && 'orbit-blip')} />
                         {agent.name}
+                        {agent.runtime === 'remote' && (() => {
+                          const m = remoteMachines.data?.find((x) => x.id === agent.machineId)
+                          return <Server aria-label={`Sur ${m?.name ?? 'une machine distante'}${m?.status === 'online' ? '' : ' (hors ligne)'}`} className={cn('size-3', m?.status === 'online' ? 'text-fg-3' : 'text-fg-4 opacity-60')} />
+                        })()}
                       </div>
                       <div className="mx-auto max-w-[180px] truncate text-xs text-fg-3">{agent.statusText ?? STATUS_LABELS[agent.status]}</div>
                     </div>

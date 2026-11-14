@@ -1,7 +1,7 @@
 import { ArrowRight, CalendarClock, Server, Waypoints } from 'lucide-react'
 import { Badge } from '@/components/ui/field'
 import { relative } from '@/lib/format'
-import { useAgents, useAutomations, useConstellationRuns, useRemoteMachines } from '@/lib/queries'
+import { useAgents, useAutomations, useConstellationRuns, useMissions, useRemoteMachines } from '@/lib/queries'
 import { navigate } from '@/stores/router'
 import { CompanionAvatar } from './CompanionAvatar'
 
@@ -27,6 +27,7 @@ export function OverviewMotion() {
   const automations = useAutomations()
   const machines = useRemoteMachines()
   const agents = useAgents()
+  const missions = useMissions()
   const activeRuns = (runs.data ?? []).filter((r) => ['planning', 'running', 'synthesizing'].includes(r.status))
   const recentRuns = (runs.data ?? []).slice(0, 2)
   const upcoming = (automations.data ?? []).filter((a) => a.status === 'active' && a.nextRunAt).sort((a, b) => a.nextRunAt!.localeCompare(b.nextRunAt!)).slice(0, 3)
@@ -60,6 +61,7 @@ export function OverviewMotion() {
         {upcoming.length ? (
           upcoming.map((a) => (
             <div key={a.id} className="flex items-center gap-2">
+              {a.schedulerOwner !== 'local' && <Server className="size-3 shrink-0 text-fg-4" aria-label="Sur un serveur" />}
               <span className="min-w-0 flex-1 truncate text-fg-2">{a.name}</span>
               <span className="shrink-0 text-2xs text-fg-3 tabular">{relative(a.nextRunAt)}</span>
             </div>
@@ -78,6 +80,20 @@ export function OverviewMotion() {
               <span className="shrink-0 text-2xs text-fg-3">{m.runningMissions ? `${m.runningMissions} mission${m.runningMissions > 1 ? 's' : ''}` : m.status === 'online' ? 'en ligne' : 'hors ligne'}</span>
             </div>
           ))}
+          {(() => {
+            const approvals = remote.reduce((n, m) => n + m.pendingApprovals, 0)
+            const last = (missions.data ?? []).find((x) => x.remoteMachineId && x.status === 'done')
+            return (
+              <>
+                {approvals > 0 && <div className="text-2xs text-warning">{approvals} accord{approvals > 1 ? 's' : ''} demandé{approvals > 1 ? 's' : ''} par un serveur</div>}
+                {last && (
+                  <button onClick={() => navigate(`/missions/${last.id}`)} className="block w-full truncate text-left text-2xs text-fg-4 hover:text-fg-2">
+                    Terminée sur serveur : {last.title}
+                  </button>
+                )}
+              </>
+            )
+          })()}
           {remoteAgents.length > 0 && (
             <div className="flex items-center gap-1.5 text-2xs text-fg-4">
               <span className="flex -space-x-1">{remoteAgents.slice(0, 4).map((a) => <CompanionAvatar key={a.id} appearance={a.appearance} size={14} />)}</span>

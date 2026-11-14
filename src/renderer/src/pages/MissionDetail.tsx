@@ -38,6 +38,7 @@ import { ApprovalRequestCard, DiffView } from '@/orbit/ApprovalRequest'
 import { CompanionAvatar } from '@/orbit/CompanionAvatar'
 import { useConfirm } from '@/orbit/Confirm'
 import { OrbitEmptyState } from '@/orbit/EmptyState'
+import { ArtifactsPanel, RemoteBanner, useRemoteState } from '@/orbit/RemoteMission'
 import { Markdown } from '@/orbit/Markdown'
 import { MissionStatusLabel, PRIORITY_LABELS, PriorityGlyph } from '@/orbit/MissionStatus'
 import { navigate } from '@/stores/router'
@@ -324,6 +325,8 @@ export function MissionDetailPage({ missionId, focusApproval }: { missionId: str
   const duplicate = useAction('missions.duplicate', { onSuccess: (m) => navigate(`/missions/${m.id}`) })
   const remove = useAction('missions.delete', { onSuccess: () => navigate('/missions') })
   const bottomRef = useRef<HTMLDivElement>(null)
+  const remote = useRemoteState(q.data?.mission.remoteMachineId ?? null)
+  const remoteOffline = Boolean(q.data?.mission.remoteMachineId) && !remote.online
 
   const events = useMemo(() => {
     const map = new Map<string, ExecutionEvent>()
@@ -364,7 +367,7 @@ export function MissionDetailPage({ missionId, focusApproval }: { missionId: str
         </div>
         <div className="no-drag flex shrink-0 gap-2">
           {running && (
-            <Button variant="danger" onClick={() => cancel.mutate({ id: mission.id })}>
+            <Button variant="danger" disabled={remoteOffline} title={remoteOffline ? 'Serveur hors ligne : reconnectez-le pour agir.' : undefined} onClick={() => cancel.mutate({ id: mission.id })}>
               <Square className="fill-current" /> Arrêter
             </Button>
           )}
@@ -384,6 +387,7 @@ export function MissionDetailPage({ missionId, focusApproval }: { missionId: str
           <Button
             variant="ghost"
             aria-label="Supprimer"
+            disabled={Boolean(mission.remoteMachineId) && (running || mission.status === 'approval_required')}
             onClick={async () => {
               if (await confirm({ title: 'Supprimer cette mission ?', body: 'Son historique d’exécution sera supprimé.', confirm: 'Supprimer', danger: true })) remove.mutate({ id: mission.id })
             }}
@@ -395,6 +399,7 @@ export function MissionDetailPage({ missionId, focusApproval }: { missionId: str
 
       <div className="grid grid-cols-[minmax(0,1fr)_340px] gap-5">
         <div className="min-w-0 space-y-4">
+          <RemoteBanner mission={mission} />
           {pending.map((a) => (
             <div key={a.id} ref={a.id === focusApproval ? (el) => el?.scrollIntoView({ block: 'center', behavior: 'smooth' }) : undefined} className={cn('rounded-[12px]', a.id === focusApproval && 'ring-2 ring-warning/50')}>
               <ApprovalRequestCard approval={a} agent={agent} expanded />
@@ -505,6 +510,7 @@ export function MissionDetailPage({ missionId, focusApproval }: { missionId: str
             )}
           </section>
 
+          <ArtifactsPanel mission={mission} />
           <FilesPanel changes={fileChanges} workspace={mission.workspace} inventories={inventories} />
 
           {!mission.engine && events.length > 0 && (

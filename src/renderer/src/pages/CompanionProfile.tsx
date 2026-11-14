@@ -12,7 +12,7 @@ import { Badge, Switch, Tabs, Textarea } from '@/components/ui/field'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/overlay'
 import { cn } from '@/lib/cn'
 import { compactNumber, duration, integer, money, relative } from '@/lib/format'
-import { useAction, useActivity, useAgent, useAutomations, useConstellations, useConversations, useMachines, useMemory, useMissions, useProviders, useRecentFiles, useSecurity, useUsage } from '@/lib/queries'
+import { useAction, useActivity, useAgent, useAutomations, useConstellations, useConversations, useMemory, useMissions, useProviders, useRecentFiles, useRemoteMachines, useSecurity, useUsage } from '@/lib/queries'
 import { ActivityEventRow } from '@/orbit/ActivityEvent'
 import { AutoActionLog, AutoAllowedList, AutonomyModes, GrantList } from '@/orbit/PermissionPanels'
 import { CompanionAvatar, CompanionStatusIndicator } from '@/orbit/CompanionAvatar'
@@ -305,9 +305,12 @@ function Stats({ agent }: { agent: Agent }) {
 }
 
 function Config({ agent }: { agent: Agent }) {
-  const machines = useMachines()
+  const machines = useRemoteMachines()
+  const automations = useAutomations()
   const engine = ENGINE_INFO[agent.providerId]
   const machine = agent.runtime === 'remote' ? machines.data?.find((m) => m.id === agent.machineId) : null
+  const remoteEngine = machine?.engines.find((e) => e.id === agent.providerId)
+  const linked = (automations.data ?? []).filter((a) => a.targetKind === 'agent' && a.targetId === agent.id)
   const rows: [string, React.ReactNode][] = [
     ['Moteur', engine.label],
     ['Mode de connexion', engine.connection],
@@ -317,7 +320,9 @@ function Config({ agent }: { agent: Agent }) {
     ['Autonomie', { manual: 'Manuel', supervised: 'Supervisé', automated: 'Automatisé' }[agent.autonomy]],
     ['Isolation', agent.isolation === 'strict' ? 'Renforcée (Seatbelt Orbit)' : 'Standard (politique + bac à sable du moteur)'],
     ['Dossier de travail', agent.workingDirectory ?? '—'],
-    ['Machine', machine ? `${machine.name} (distante)` : agent.runtime === 'remote' ? 'Machine distante introuvable' : 'Ce Mac'],
+    ['Machine', machine ? `${machine.name} · ${machine.status === 'online' ? 'en ligne' : `hors ligne${machine.lastSyncedAt ? `, synchronisée ${relative(machine.lastSyncedAt)}` : ''}`}` : agent.runtime === 'remote' ? 'Machine distante introuvable' : 'Ce Mac'],
+    ...(machine ? [['Moteur sur la machine', remoteEngine ? (remoteEngine.available ? `${engine.label} prêt${remoteEngine.version ? ` (${remoteEngine.version})` : ''}` : `${engine.label} indisponible : ${remoteEngine.detail}`) : `${engine.label} non détecté sur ${machine.name}`] as [string, React.ReactNode]] : []),
+    ['Automatisations', linked.length ? linked.map((a) => `${a.name} (${a.schedulerOwner === 'local' ? 'ce Mac' : (machines.data?.find((m) => m.id === a.schedulerOwner)?.name ?? 'serveur')})`).join(', ') : 'Aucune'],
     ['Budget journalier', agent.dailyBudgetUsd != null ? money(agent.dailyBudgetUsd) : 'Illimité'],
     ['Créé', new Date(agent.createdAt).toLocaleString('fr-FR')],
   ]

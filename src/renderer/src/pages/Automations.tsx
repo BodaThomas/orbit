@@ -1,20 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, ArrowLeft, CalendarClock, Check, ChevronDown, Clock, MoreHorizontal, Pencil, Play, Plus, Power, Trash2, Waypoints, Zap } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ArrowLeftRight, CalendarClock, Check, ChevronDown, Clock, Laptop, Loader2, MoreHorizontal, Pencil, Play, Plus, Power, Server, Trash2, Waypoints, X, Zap } from 'lucide-react'
 import { describeRecurrence, localDateTimeInput, type Recurrence } from '@shared/schedule'
-import type { Automation, AutomationRun, MissedPolicy } from '@shared/types'
+import type { Agent, Automation, AutomationRun, ConstellationDefinition, MissedPolicy, RemoteMachine } from '@shared/types'
 import { Page, PageHeader, Panel } from '@/components/shell/Page'
 import { Button } from '@/components/ui/button'
 import { Badge, Input, Label, Segmented, Skeleton, Switch, Textarea } from '@/components/ui/field'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/overlay'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, Tooltip } from '@/components/ui/overlay'
 import { call } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { relative } from '@/lib/format'
-import { useAction, useAgents, useAutomationRuns, useAutomations, useConstellations } from '@/lib/queries'
+import { useAction, useAgents, useAutomationRuns, useAutomations, useConstellations, useRemoteMachines } from '@/lib/queries'
 import { CompanionAvatar } from '@/orbit/CompanionAvatar'
 import { useConfirm } from '@/orbit/Confirm'
 import { OrbitEmptyState } from '@/orbit/EmptyState'
 import { navigate } from '@/stores/router'
 import { useQuery } from '@tanstack/react-query'
+import { toast } from 'sonner'
 
 const SYSTEM_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone
 const RUN_META: Record<AutomationRun['status'], { label: string; tone: 'success' | 'danger' | 'warning' | 'neutral' | 'accent' }> = {
@@ -44,6 +45,43 @@ function useTarget(a: Pick<Automation, 'targetKind' | 'targetId'>) {
   return { name: def ? `Constellation « ${def.name} »` : 'Constellation supprimée', avatars: (def?.members ?? []).map((m) => agents.data?.find((x) => x.id === m.agentId)).filter((x): x is NonNullable<typeof x> => Boolean(x)) }
 }
 
+/** Machine where the automation's target works ('local' = this Mac), or null if mixed/unknown. */
+export function targetPlacement(kind: 'agent' | 'constellation', targetId: string | null, agents: Agent[], defs: ConstellationDefinition[]): string | null {
+  if (!targetId) return null
+  const where = (id: string) => {
+    const a = agents.find((x) => x.id === id)
+    return !a ? null : a.runtime === 'remote' ? a.machineId : 'local'
+  }
+  if (kind === 'agent') return where(targetId)
+  const def = defs.find((d) => d.id === targetId)
+  const places = new Set((def?.members ?? []).map((m) => where(m.agentId)))
+  return places.size === 1 ? ([...places][0] ?? null) : null
+}
+
+/** Where it is scheduled, honestly: this Mac, a server (with its connection), or a move in progress. */
+function PlacementChip({ a, machines }: { a: Automation; machines: RemoteMachine[] }) {
+  if (a.ownerState === 'transferring') {
+    const to = a.pendingOwner === 'local' ? 'ce Mac' : (machines.find((m) => m.id === a.pendingOwner)?.name ?? 'une machine')
+    return (
+      <Tooltip content="Aucun planificateur ne la déclenche tant que le transfert n’est pas confirmé des deux côtés.">
+        <span className="flex items-center gap-1.5 text-warning"><Loader2 className="size-3.5 animate-spin" /> Transfert vers {to}…</span>
+      </Tooltip>
+    )
+  }
+  if (a.schedulerOwner === 'local') return <span className="flex items-center gap-1.5 text-fg-2"><Laptop className="size-3.5 text-fg-3" /> Ce Mac</span>
+  const m = machines.find((x) => x.id === a.schedulerOwner)
+  const online = m?.status === 'online'
+  return (
+    <Tooltip content={online ? 'Planifiée et exécutée par le serveur, indépendamment de ce Mac.' : `Serveur injoignable : dernier état connu${m?.lastSyncedAt ? `, synchronisé ${relative(m.lastSyncedAt)}` : ''}. Le serveur continue de la déclencher s’il fonctionne.`}>
+      <span className={cn('flex items-center gap-1.5', online ? 'text-fg-2' : 'text-fg-3')}>
+        <Server className="size-3.5 text-fg-3" /> {m?.name ?? 'Machine distante'}
+        <span className={cn('size-1.5 rounded-full', online ? 'bg-success' : 'bg-fg-4')} />
+        {!online && <span className="text-2xs">dernier état connu</span>}
+      </span>
+    </Tooltip>
+  )
+}
+
 function AutomationCard({ a }: { a: Automation }) {
   const target = useTarget(a)
   const confirm = useConfirm()
@@ -52,6 +90,23 @@ function AutomationCard({ a }: { a: Automation }) {
   const setStatus = useAction('automations.setStatus')
   const runNow = useAction('automations.runNow', { success: 'Exécution lancée' })
   const del = useAction('automations.delete', { success: 'Automatisation supprimée' })
+  const transfer = useAction('automations.transfer', { success: (x) => (x.schedulerOwner === 'local' ? `« ${x.name} » est planifiée sur ce Mac` : `« ${x.name} » est planifiée sur le serveur`) })
+  const cancelTransfer = useAction('automations.cancelTransfer', { success: 'Transfert annulé' })
+  const machines = useRemoteMachines().data ?? []
+  const agents = useAgents().data ?? []
+  const defs = useConstellations().data ?? []
+  const placement = targetPlacement(a.targetKind, a.targetId, agents, defs)
+  const transferring = a.ownerState === 'transferring'
+  const remoteOwner = a.schedulerOwner !== 'local' ? machines.find((m) => m.id === a.schedulerOwner) : null
+  const ownerOffline = Boolean(remoteOwner && remoteOwner.status !== 'online')
+  const moveTo = async (to: string, label: string) => {
+    const ok = await confirm({
+      title: `Planifier « ${a.name} » ${to === 'local' ? 'sur ce Mac' : `sur ${label}`} ?`,
+      body: to === 'local' ? `Le serveur arrête d’abord de la planifier, puis ce Mac la reprend à partir de maintenant (les occurrences du transfert ne sont pas rejouées). Elle ne s’exécutera ensuite que si Orbit est ouvert.` : `Orbit vérifie le serveur, enregistre l’automatisation là-bas et relit sa confirmation avant de désactiver ce Mac. En cas de doute, personne ne la déclenche jusqu’à la vérification suivante — jamais les deux à la fois.`,
+      confirm: 'Transférer',
+    })
+    if (ok) transfer.mutate({ id: a.id, to })
+  }
   const active = a.status === 'active'
   return (
     <section className={cn('card overflow-hidden', !active && 'opacity-80')}>
@@ -74,6 +129,7 @@ function AutomationCard({ a }: { a: Automation }) {
             {target.name} · {a.title}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
+            <PlacementChip a={a} machines={machines} />
             <span className="flex items-center gap-1.5 text-fg-2">
               <CalendarClock className="size-3.5 text-fg-3" />
               {a.recurrence ? describeRecurrence(a.recurrence) : 'Sur événement'}
@@ -97,7 +153,7 @@ function AutomationCard({ a }: { a: Automation }) {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          {a.status !== 'completed' && <Switch checked={active} onChange={(v) => setStatus.mutate({ id: a.id, status: v ? 'active' : 'paused' })} label={active ? 'Mettre en pause' : 'Reprendre'} />}
+          {a.status !== 'completed' && <Switch checked={active} disabled={transferring || ownerOffline} onChange={(v) => setStatus.mutate({ id: a.id, status: v ? 'active' : 'paused' })} label={active ? 'Mettre en pause' : 'Reprendre'} />}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button className="flex size-7 items-center justify-center rounded-[7px] text-fg-3 hover:bg-white/5 hover:text-fg" aria-label="Actions">
@@ -106,15 +162,31 @@ function AutomationCard({ a }: { a: Automation }) {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem
+                disabled={transferring || ownerOffline}
                 onSelect={async () => {
                   if (!a.sensitive || (await confirm({ title: `Exécuter « ${a.name} » maintenant ?`, body: 'La cible peut modifier des fichiers ou exécuter des commandes. Les approbations habituelles s’appliquent.', confirm: 'Exécuter' }))) runNow.mutate({ id: a.id })
                 }}
               >
                 <Play /> Exécuter maintenant
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => navigate(`/automations/${a.id}/edit`)}><Pencil /> Modifier</DropdownMenuItem>
+              <DropdownMenuItem disabled={transferring || ownerOffline} onSelect={() => navigate(`/automations/${a.id}/edit`)}><Pencil /> Modifier</DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem danger onSelect={async () => (await confirm({ title: `Supprimer « ${a.name} » ?`, body: 'Son historique d’exécutions sera supprimé. Les missions déjà réalisées restent dans Missions.', confirm: 'Supprimer', danger: true })) && del.mutate({ id: a.id })}>
+              <DropdownMenuLabel>Lieu d’exécution</DropdownMenuLabel>
+              {transferring ? (
+                <DropdownMenuItem onSelect={() => cancelTransfer.mutate({ id: a.id })}><X /> Annuler le transfert</DropdownMenuItem>
+              ) : (
+                <>
+                  {a.schedulerOwner !== 'local' && <DropdownMenuItem disabled={ownerOffline} onSelect={() => moveTo('local', 'ce Mac')}><Laptop /> Ramener sur ce Mac</DropdownMenuItem>}
+                  {machines.filter((m) => m.id !== a.schedulerOwner).map((m) => (
+                    <DropdownMenuItem key={m.id} disabled={m.status !== 'online' || placement !== m.id} onSelect={() => moveTo(m.id, m.name)}>
+                      <ArrowLeftRight /> Sur {m.name}{placement !== m.id ? ' (cible non placée ici)' : m.status !== 'online' ? ' (hors ligne)' : ''}
+                    </DropdownMenuItem>
+                  ))}
+                  {machines.length === 0 && a.schedulerOwner === 'local' && <DropdownMenuItem disabled><Server /> Aucune machine distante</DropdownMenuItem>}
+                </>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem danger disabled={transferring || ownerOffline} onSelect={async () => (await confirm({ title: `Supprimer « ${a.name} » ?`, body: 'Son historique d’exécutions sera supprimé. Les missions déjà réalisées restent dans Missions.', confirm: 'Supprimer', danger: true })) && del.mutate({ id: a.id })}>
                 <Trash2 /> Supprimer…
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -223,8 +295,9 @@ export function AutomationsPage({ focusRun }: { focusRun?: string | null }) {
               </ol>
             </Panel>
             <section className="card p-4 text-[12.5px] leading-relaxed text-fg-3">
-              <div className="mb-1.5 flex items-center gap-1.5 text-[13px] font-medium text-fg"><Clock className="size-3.5" /> Quand Orbit peut agir</div>
-              Les automatisations s’exécutent tant qu’Orbit est ouvert — même fenêtre fermée. Si le Mac est éteint ou en veille, rien ne s’exécute : au réveil, chaque exécution manquée suit la règle choisie (ignorer, rattraper une fois, ou vous demander). Pour un fonctionnement continu, utilisez une machine distante (Machines).
+              <div className="mb-1.5 flex items-center gap-1.5 text-[13px] font-medium text-fg"><Clock className="size-3.5" /> Où et quand elles s’exécutent</div>
+              <div className="mb-2 flex gap-2"><Laptop className="mt-0.5 size-3.5 shrink-0 text-fg-3" /><span><span className="text-fg-2">Ce Mac</span> — tant qu’Orbit est ouvert, même fenêtre fermée. Mac éteint ou en veille : rien ne s’exécute ; au retour, chaque exécution manquée suit la règle choisie.</span></div>
+              <div className="flex gap-2"><Server className="mt-0.5 size-3.5 shrink-0 text-fg-3" /><span><span className="text-fg-2">Serveur</span> — planifiée et exécutée par le runtime, indépendamment de ce Mac, tant que le serveur fonctionne. Chaque automatisation n’a qu’un seul planificateur.</span></div>
               <label className="mt-3 flex items-center justify-between gap-2 text-fg-2">
                 Ouvrir Orbit à l’ouverture de session
                 <Switch
@@ -295,6 +368,12 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
   const [maxRuns, setMaxRuns] = useState<number | null>(null)
   const [eventSource, setEventSource] = useState<string | null>(null)
   const [eventKind, setEventKind] = useState<'mission.completed' | 'mission.failed'>('mission.completed')
+  const [location, setLocation] = useState<string>('local')
+  const [maxDuration, setMaxDuration] = useState<number | null>(null)
+  const [budget, setBudget] = useState<number | null>(null)
+  const [failurePolicy, setFailurePolicy] = useState<'notify' | 'pause'>('notify')
+  const [saving, setSaving] = useState(false)
+  const machines = useRemoteMachines()
 
   useEffect(() => {
     if (!existing || loaded) return
@@ -306,6 +385,10 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
     setTz(existing.timezone)
     setPolicy(existing.missedPolicy)
     setMaxRuns(existing.maxRunsPerDay)
+    setLocation(existing.ownerState === 'transferring' ? (existing.pendingOwner ?? 'local') : existing.schedulerOwner)
+    setMaxDuration(existing.maxDurationMin)
+    setBudget(existing.budgetUsd)
+    setFailurePolicy(existing.failurePolicy)
     const r = existing.recurrence
     if (!r) {
       setPreset('event')
@@ -329,11 +412,12 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
     }
   }, [])
   const targets = targetKind === 'agent' ? (agents.data ?? []).filter((a) => a.enabled).map((a) => ({ id: a.id, label: a.name, appearance: a.appearance })) : (defs.data ?? []).filter((d) => !d.isTemplate).map((d) => ({ id: d.id, label: d.name, appearance: agents.data?.find((a) => a.id === d.coordinatorAgentId)?.appearance }))
-  const create = useAction('automations.create', { success: (a) => `« ${a.name} » est planifiée`, onSuccess: () => navigate('/automations') })
-  const update = useAction('automations.update', { success: 'Automatisation mise à jour', onSuccess: () => navigate('/automations') })
-  const valid = name.trim() && targetId && title.trim() && (preset === 'event' ? Boolean(eventSource) : !preview.data?.error)
-  const save = () => {
-    if (!valid) return
+  const placement = targetPlacement(targetKind, targetId, agents.data ?? [], defs.data ?? [])
+  const locationMachine = location !== 'local' ? machines.data?.find((m) => m.id === location) : null
+  const locationOk = location === 'local' || (placement === location && locationMachine?.status === 'online')
+  const valid = name.trim() && targetId && title.trim() && (preset === 'event' ? Boolean(eventSource) : !preview.data?.error) && locationOk
+  const save = async () => {
+    if (!valid || saving) return
     const input = {
       name: name.trim(),
       description: '',
@@ -346,9 +430,25 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
       missedPolicy: policy,
       maxRunsPerDay: maxRuns,
       triggers: preset === 'event' ? [{ kind: eventKind, sourceAgentId: eventSource, sourceAutomationId: null, cooldownSec: 300 }] : [],
+      maxDurationMin: maxDuration,
+      budgetUsd: budget,
+      failurePolicy,
     }
-    if (automationId) update.mutate({ id: automationId, input })
-    else create.mutate(input)
+    setSaving(true)
+    try {
+      const saved = automationId ? await call('automations.update', { id: automationId, input }) : await call('automations.create', input)
+      const owner = saved.ownerState === 'transferring' ? saved.pendingOwner : saved.schedulerOwner
+      if (owner !== location) {
+        // Created or kept on this Mac first, then moved: never two schedulers at once.
+        const moved = await call('automations.transfer', { id: saved.id, to: location })
+        toast.success(`« ${moved.name} » est planifiée ${location === 'local' ? 'sur ce Mac' : `sur ${locationMachine?.name ?? 'le serveur'}`}`)
+      } else toast.success(automationId ? 'Automatisation mise à jour' : `« ${saved.name} » est planifiée`)
+      navigate('/automations')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSaving(false)
+    }
   }
   if (!loaded) return null
 
@@ -516,7 +616,31 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
         )}
         {section(
           3,
-          'Si Orbit était fermé à l’heure prévue',
+          'Où',
+          <div className="space-y-2">
+            <div className="grid grid-cols-3 gap-2">
+              {[{ id: 'local', name: 'Ce Mac', sub: 'Orbit doit être ouvert', online: true, icon: <Laptop className="size-4 text-fg-2" /> }, ...(machines.data ?? []).map((m) => ({ id: m.id, name: m.name, sub: placement !== m.id ? 'Cible non placée sur ce serveur' : m.status === 'online' ? 'Indépendant de ce Mac' : 'Hors ligne', online: m.status === 'online' && placement === m.id, icon: <Server className="size-4 text-fg-2" /> }))].map((o) => (
+                <button key={o.id} type="button" disabled={!o.online} onClick={() => setLocation(o.id)} aria-pressed={location === o.id} className={cn('flex items-center gap-2.5 rounded-[11px] p-3 text-left disabled:opacity-45', location === o.id ? 'bg-accent/[0.09] shadow-[inset_0_0_0_1.5px_rgb(165_155_250/0.6)]' : 'bg-white/[0.025] shadow-[inset_0_0_0_1px_var(--color-line)] enabled:hover:bg-white/[0.05]')}>
+                  {o.icon}
+                  <span className="min-w-0">
+                    <span className="block truncate text-[13px] text-fg">{o.name}</span>
+                    <span className="block truncate text-[11.5px] text-fg-3">{o.sub}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-fg-3">
+              {location === 'local'
+                ? placement && placement !== 'local'
+                  ? 'Le compagnon travaille sur un serveur, mais c’est ce Mac qui déclenchera la mission : il doit être allumé et Orbit ouvert. Choisissez le serveur pour qu’elle parte sans lui.'
+                  : 'Nécessite que ce Mac soit allumé et Orbit ouvert (même fenêtre fermée).'
+                : 'Le serveur planifie et exécute l’automatisation lui-même, Mac éteint compris. Orbit retrouve l’historique et les résultats à la reconnexion.'}
+            </p>
+          </div>,
+        )}
+        {section(
+          4,
+          'Si l’heure prévue est manquée',
           <div className="space-y-2">
             <div className="grid grid-cols-3 gap-2">
               {POLICIES.map((p) => (
@@ -530,19 +654,33 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
           </div>,
         )}
         {section(
-          4,
+          5,
           'Limites',
-          <div className="flex items-end gap-4">
-            <div>
-              <Label hint="Laisser vide : pas de limite">Exécutions maximum par 24 h</Label>
-              <Input type="number" min={1} max={500} value={maxRuns ?? ''} onChange={(e) => setMaxRuns(e.target.value === '' ? null : Math.max(1, Number(e.target.value)))} className="w-36" placeholder="Aucune" />
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-end gap-4">
+              <div>
+                <Label hint="Vide : aucune">Exécutions max. / 24 h</Label>
+                <Input type="number" min={1} max={500} value={maxRuns ?? ''} onChange={(e) => setMaxRuns(e.target.value === '' ? null : Math.max(1, Number(e.target.value)))} className="w-36" placeholder="Aucune" />
+              </div>
+              <div>
+                <Label hint="Arrêtée au-delà">Durée max. (min)</Label>
+                <Input type="number" min={1} max={1440} value={maxDuration ?? ''} onChange={(e) => setMaxDuration(e.target.value === '' ? null : Math.max(1, Math.min(1440, Number(e.target.value))))} className="w-36" placeholder="Aucune" />
+              </div>
+              <div>
+                <Label hint="Dépense API, 24 h">Budget ($)</Label>
+                <Input type="number" min={0} step={0.5} value={budget ?? ''} onChange={(e) => setBudget(e.target.value === '' ? null : Math.max(0, Number(e.target.value)))} className="w-32" placeholder="Aucun" />
+              </div>
+              <div>
+                <Label>En cas d’échec</Label>
+                <Segmented value={failurePolicy} onChange={setFailurePolicy} options={[{ value: 'notify', label: 'Me notifier' }, { value: 'pause', label: 'Mettre en pause' }]} />
+              </div>
             </div>
-            <p className="flex-1 pb-2 text-xs text-fg-3">Les budgets du compagnon ou de la constellation, ses permissions et ses approbations s’appliquent à chaque exécution. Un compagnon en mode manuel refuse les missions automatiques.</p>
+            <p className="text-xs text-fg-3">Le budget ne compte que la dépense API mesurée ou estimée : l’usage d’un abonnement n’a pas de prix et n’est pas compté. Les permissions, approbations et budgets du compagnon s’appliquent toujours ; un compagnon en mode manuel refuse les missions automatiques.</p>
           </div>,
         )}
         <div className="flex justify-end gap-2 pb-6">
           <Button variant="ghost" onClick={() => navigate('/automations')}>Annuler</Button>
-          <Button variant="primary" disabled={!valid || create.isPending || update.isPending} onClick={save}>
+          <Button variant="primary" disabled={!valid || saving} onClick={() => void save()}>
             <Check /> {automationId ? 'Enregistrer' : 'Planifier'}
           </Button>
         </div>
