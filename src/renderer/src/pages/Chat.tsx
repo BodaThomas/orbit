@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUp, Copy, MessageSquarePlus, MoreHorizontal, Pencil, RotateCcw, Search, Square, Trash2, TriangleAlert, UserRound } from 'lucide-react'
+import { ArrowUp, Copy, MessageSquarePlus, MoreHorizontal, Pencil, RotateCcw, Rocket, Search, Square, Trash2, TriangleAlert, UserRound } from 'lucide-react'
 import { STATUS_LABELS } from '@shared/catalog'
 import type { Agent, Conversation, Message } from '@shared/types'
 import { Button } from '@/components/ui/button'
@@ -291,7 +291,21 @@ export function ChatPage({ agentId, conversationId }: { agentId: string; convers
             </div>
           )}
         </div>
-        <Composer agent={agent} conversationId={activeId} streaming={streaming} onSent={(id) => id !== activeId && navigate(`/chat/${agent.id}/${id}`)} />
+        {provider?.capabilities.kind === 'agent' ? (
+          <div className="shrink-0 px-6 pb-5">
+            <div className="mx-auto flex max-w-[760px] items-center gap-3 rounded-[14px] bg-surface px-4 py-3 ring-1 ring-line">
+              <Rocket className="size-4 shrink-0 text-accent" />
+              <div className="min-w-0 flex-1 text-[13px] leading-snug text-fg-2">
+                {agent.name} travaille avec <span className="text-fg">{provider.name}</span> : il agit dans {agent.workingDirectory ? <span className="font-mono text-xs text-fg">{agent.workingDirectory}</span> : 'son dossier autorisé'} au fil de missions, que vous pouvez suivre et poursuivre.
+              </div>
+              <Button size="sm" variant="primary" onClick={() => useUi.getState().openNewMission(agent.id)}>
+                Confier une mission
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <Composer agent={agent} conversationId={activeId} streaming={streaming} onSent={(id) => id !== activeId && navigate(`/chat/${agent.id}/${id}`)} />
+        )}
       </div>
     </div>
   )

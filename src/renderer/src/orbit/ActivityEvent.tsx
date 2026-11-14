@@ -1,4 +1,4 @@
-import { AlertTriangle, Bot, CheckCircle2, FileText, KeyRound, MessageSquare, Play, Rocket, ShieldCheck, Square, Trash2, Wallet, Wrench, XCircle } from 'lucide-react'
+import { AlertTriangle, Ban, Bot, CheckCircle2, FileText, KeyRound, MessageSquare, Play, Rocket, ShieldCheck, Square, Trash2, Wallet, Wrench, XCircle } from 'lucide-react'
 import type { ActivityEvent as Evt, Agent } from '@shared/types'
 import { Tooltip } from '@/components/ui/overlay'
 import { cn } from '@/lib/cn'
@@ -20,6 +20,7 @@ const ICONS: Record<Evt['type'], typeof Bot> = {
   'approval.requested': ShieldCheck,
   'approval.resolved': ShieldCheck,
   'tool.called': Wrench,
+  'tool.denied': Ban,
   'file.written': FileText,
   'provider.connected': KeyRound,
   'provider.error': AlertTriangle,

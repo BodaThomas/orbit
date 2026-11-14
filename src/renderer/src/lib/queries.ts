@@ -2,7 +2,7 @@ import { QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/re
 import { useEffect } from 'react'
 import { toast } from 'sonner'
 import type { InvalidateScope, IpcChannel, IpcInput, IpcOutputs } from '@shared/ipc'
-import type { ActivityLevel, Message } from '@shared/types'
+import type { ActivityLevel, Message, MissionDetail } from '@shared/types'
 import { navigate } from '@/stores/router'
 import { useUi } from '@/stores/ui'
 import { ApiError, call } from './api'
@@ -50,6 +50,19 @@ export function useOrbitEvents(): void {
           break
         case 'mission.event':
           useUi.getState().pushMissionEvent(evt.event)
+          break
+        case 'mission.delta':
+          useUi.getState().appendMissionDraft(evt.missionId, evt.delta)
+          break
+        case 'mission.activity':
+          useUi.getState().setMissionActivity(evt.missionId, evt.activity)
+          break
+        case 'mission.tool':
+          qc.setQueryData<MissionDetail>(['mission', evt.toolCall.missionId], (d) => {
+            if (!d) return d
+            const exists = d.toolCalls.some((t) => t.id === evt.toolCall.id)
+            return { ...d, toolCalls: exists ? d.toolCalls.map((t) => (t.id === evt.toolCall.id ? evt.toolCall : t)) : [...d.toolCalls, evt.toolCall] }
+          })
           break
         case 'navigate':
           navigate(evt.route)

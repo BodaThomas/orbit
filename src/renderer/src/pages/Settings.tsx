@@ -48,12 +48,36 @@ export function ProviderConnect({ provider, compact }: { provider: ProviderInfo;
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-[14px] font-medium text-fg">
             {provider.name}
-            {planned ? <Badge>Bientôt</Badge> : provider.connected ? <Badge tone="success">Connecté</Badge> : provider.hasSecret ? <Badge tone="danger">Erreur</Badge> : <Badge tone="warning">Non connecté</Badge>}
+            {planned ? (
+              <Badge>Bientôt</Badge>
+            ) : provider.capabilities.kind === 'agent' ? (
+              <>
+                <Badge tone="accent">Moteur agent</Badge>
+                {provider.connected ? <Badge tone="success">Prêt</Badge> : <Badge tone="warning">À vérifier</Badge>}
+              </>
+            ) : provider.connected ? (
+              <Badge tone="success">Connecté</Badge>
+            ) : provider.hasSecret ? (
+              <Badge tone="danger">Erreur</Badge>
+            ) : (
+              <Badge tone="warning">Non connecté</Badge>
+            )}
           </div>
           <div className="mt-0.5 text-xs leading-snug text-fg-3">{provider.notes}</div>
         </div>
       </div>
-      {!planned && provider.id !== 'demo' && (
+      {!planned && provider.capabilities.kind === 'agent' && (
+        <div className="mt-3 flex items-center gap-3 pl-10">
+          <span className={cn('text-xs leading-snug', provider.connected ? 'text-fg-2' : 'text-warning')}>
+            {provider.statusDetail ?? 'État inconnu : lancez une vérification.'}
+            {provider.lastValidatedAt && <span className="text-fg-4"> · vérifié {relative(provider.lastValidatedAt)}</span>}
+          </span>
+          <Button size="sm" variant="ghost" className="ml-auto shrink-0" disabled={validate.isPending} onClick={() => validate.mutate({ providerId: provider.id })}>
+            {validate.isPending ? 'Vérification…' : 'Vérifier'}
+          </Button>
+        </div>
+      )}
+      {!planned && provider.id !== 'demo' && provider.capabilities.kind !== 'agent' && (
         <div className="mt-3 pl-10">
           {provider.hasSecret ? (
             <div className="flex items-center gap-2">

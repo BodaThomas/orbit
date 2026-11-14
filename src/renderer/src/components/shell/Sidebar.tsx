@@ -123,17 +123,20 @@ function ProvidersSection() {
           <span className="text-[28px] leading-8 font-semibold tracking-[-0.02em] text-fg">{parts.value}</span>
           <span className="text-[17px] text-fg-2">{parts.currency}</span>
         </div>
-        {today && (today.unknownCount > 0 || today.estimated > 0) && (
+        {today && (today.unknownCount > 0 || today.estimated > 0 || today.subscriptionCount > 0) && (
           <div className="text-2xs text-fg-3">
-            {today.estimated > 0 && today.official === 0 ? 'Estimé' : 'Dont estimé'}
-            {today.unknownCount > 0 && ` · ${today.unknownCount} req. au coût inconnu`}
+            {today.estimated > 0 && (today.official === 0 ? 'Estimé' : 'Dont estimé')}
+            {today.unknownCount > 0 && `${today.estimated > 0 ? ' · ' : ''}${today.unknownCount} req. au coût inconnu`}
+            {today.subscriptionCount > 0 && `${today.estimated > 0 || today.unknownCount > 0 ? ' · ' : ''}${today.subscriptionCount} req. incluses dans un abonnement`}
           </div>
         )}
       </button>
       <div className="mt-1 space-y-px">
         {shown.map((p) => {
           const c = usage.data?.byProviderToday.find((b) => b.providerId === p.id)?.cost
-          const cost = c ? c.official + c.estimated : p.hasSecret || p.id === 'demo' ? 0 : null
+          // Usage covered by a subscription or with no known price has no dollar amount: show « — », not 0,00 $.
+          const priced = c ? c.official + c.estimated : 0
+          const cost = c ? (priced === 0 && (c.subscriptionCount > 0 || c.unknownCount > 0) ? null : priced) : p.hasSecret || p.id === 'demo' ? 0 : null
           return <ProviderRow key={p.id} provider={p} cost={cost} selected={open === p.id} onSelect={(o) => setOpen(o ? p.id : null)} />
         })}
       </div>

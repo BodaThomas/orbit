@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Rocket } from 'lucide-react'
+import { FolderOpen, Rocket, TriangleAlert } from 'lucide-react'
 import type { MissionPriority } from '@shared/types'
 import { Button } from '@/components/ui/button'
 import { Input, Kbd, Label, Segmented, Switch, Textarea } from '@/components/ui/field'
 import { Dialog, DialogContent } from '@/components/ui/overlay'
 import { cn } from '@/lib/cn'
-import { useAction, useAgents } from '@/lib/queries'
+import { useAction, useAgents, useProviders } from '@/lib/queries'
 import { Companion } from '@/orbit/Companion'
 import { PRIORITY_LABELS } from '@/orbit/MissionStatus'
 import { navigate } from '@/stores/router'
@@ -15,6 +15,7 @@ export function NewMissionDialog() {
   const target = useUi((s) => s.newMissionFor)
   const open = target !== undefined
   const agents = useAgents()
+  const providers = useProviders()
   const [agentId, setAgentId] = useState<string | null>(null)
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -38,7 +39,10 @@ export function NewMissionDialog() {
   }, [open, target]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const enabled = (agents.data ?? []).filter((a) => a.enabled)
-  const submit = () => agentId && title.trim() && create.mutate({ agentId, title: title.trim(), description, priority, startNow })
+  const selected = enabled.find((a) => a.id === agentId)
+  const engine = providers.data?.find((p) => p.id === selected?.providerId && p.capabilities.kind === 'agent')
+  const missingFolder = Boolean(engine && !selected?.workingDirectory)
+  const submit = () => agentId && title.trim() && !missingFolder && create.mutate({ agentId, title: title.trim(), description, priority, startNow })
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && useUi.getState().closeNewMission()}>
@@ -71,6 +75,25 @@ export function NewMissionDialog() {
                 ))}
               </div>
             </div>
+            {engine && selected && (
+              missingFolder ? (
+                <div className="flex items-center gap-2.5 rounded-[10px] bg-warning/[0.06] px-3 py-2.5 text-[12.5px] text-fg-2 ring-1 ring-warning/20">
+                  <TriangleAlert className="size-4 shrink-0 text-warning" />
+                  <span className="flex-1">{selected.name} utilise {engine.name} : choisissez d’abord le dossier qu’il a le droit de toucher.</span>
+                  <Button size="xs" variant="secondary" onClick={() => { useUi.getState().closeNewMission(); navigate(`/companions/${selected.id}/edit`) }}>
+                    Choisir
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 rounded-[10px] bg-white/[0.025] px-3 py-2 text-[12.5px] text-fg-3 ring-1 ring-line">
+                  <FolderOpen className="size-3.5 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">
+                    {engine.name} · <span className="font-mono text-[11.5px] text-fg-2">{selected.workingDirectory}</span>
+                  </span>
+                  {!engine.connected && <span className="text-warning">moteur à vérifier</span>}
+                </div>
+              )
+            )}
             <div>
               <Label>Titre</Label>
               <Input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ex. Synthétiser les retours utilisateurs de la semaine" maxLength={160} />
@@ -96,7 +119,7 @@ export function NewMissionDialog() {
                 <Button variant="ghost" onClick={() => useUi.getState().closeNewMission()}>
                   Annuler
                 </Button>
-                <Button type="submit" variant="primary" disabled={!agentId || !title.trim() || create.isPending}>
+                <Button type="submit" variant="primary" disabled={!agentId || !title.trim() || missingFolder || create.isPending}>
                   <Rocket /> {startNow ? 'Lancer la mission' : 'Créer la mission'}
                 </Button>
               </div>

@@ -344,14 +344,19 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
                         <ProviderMark id={p.id} size={26} />
                         <span className="min-w-0 flex-1">
                           <span className="block text-[13px] font-medium text-fg">{p.name}</span>
-                          <span className="block truncate text-2xs text-fg-3">{disabled ? 'Bientôt' : p.id === 'demo' ? 'Hors ligne, réponses fictives' : p.connected ? 'Connecté' : 'Clé API requise'}</span>
+                          <span className="block truncate text-2xs text-fg-3">{disabled ? 'Bientôt' : p.id === 'demo' ? 'Hors ligne, réponses fictives' : p.capabilities.kind === 'agent' ? 'Moteur agent · fichiers, commandes, sessions' : p.connected ? 'Connecté' : 'Clé API requise'}</span>
                         </span>
                         {!disabled && p.id !== 'demo' && <Badge tone={p.connected ? 'success' : 'warning'}>{p.connected ? 'Prêt' : 'À connecter'}</Badge>}
                       </button>
                     )
                   })}
                 </div>
-                {provider && !provider.connected && provider.id !== 'demo' && provider.availability === 'available' && (
+                {provider?.capabilities.kind === 'agent' && (
+                  <p className="mt-2 text-xs leading-relaxed text-fg-3">
+                    {provider.name} travaille dans un dossier que vous choisirez à l’étape suivante, au fil de missions que vous suivez en direct. {provider.statusDetail}
+                  </p>
+                )}
+                {provider && !provider.connected && provider.id !== 'demo' && provider.availability === 'available' && provider.capabilities.kind !== 'agent' && (
                   <p className="mt-2 text-xs text-fg-3">
                     Vous pourrez connecter {provider.name} dans{' '}
                     <button className="text-accent hover:underline" onClick={() => navigate('/settings/providers')}>
@@ -426,14 +431,15 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
                     </label>
                   ))}
                 </div>
-                <p className="mt-2 text-xs text-fg-3">
-                  Les outils (fichiers, commandes) arrivent avec l’adaptateur Claude Agent SDK. Ces permissions sont déjà enregistrées et contrôlées
-                  {sensitive.length > 0 && draft.autonomy === 'supervised' && ' : en mode supervisé, chaque mission demandera votre approbation'}.
+                <p className="mt-2 text-xs leading-relaxed text-fg-3">
+                  {provider?.capabilities.kind === 'agent'
+                    ? `Chaque action de ${provider.name} est vérifiée par Orbit avant de s’exécuter, uniquement dans le dossier autorisé. Une permission désactivée bloque l’action ; ${draft.autonomy === 'automated' ? 'en mode automatique, seules les commandes risquées et les actions externes vous sont soumises' : 'en mode supervisé ou manuel, chaque modification, commande ou accès réseau attend votre accord'}.`
+                    : `Ce fournisseur répond sans outils : ces permissions s’appliqueront s’il passe sur un moteur agent${sensitive.length > 0 && draft.autonomy === 'supervised' ? '. En mode supervisé, chaque mission demandera votre approbation' : ''}.`}
                 </p>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <Label>Dossier de travail</Label>
+                  <Label hint={provider?.capabilities.kind === 'agent' ? 'Requis : seul dossier accessible' : undefined}>Dossier autorisé</Label>
                   <div className="flex gap-2">
                     <Input readOnly value={draft.workingDirectory ?? ''} placeholder="Aucun" className="text-fg-2" />
                     <Button
