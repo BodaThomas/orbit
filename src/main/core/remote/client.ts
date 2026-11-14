@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { join } from 'node:path'
-import type { RuntimeEvent } from '../../../runtime/protocol'
+import type { LiveEvent, RuntimeEvent } from '../../../runtime/protocol'
 import { spawnLineProcess } from '../engine/process'
 
 /** A line transport to a runtime daemon: over SSH in real life, a local socket in tests. */
@@ -19,6 +19,8 @@ export interface SshTarget {
   runtimeHome: string
   /** Orbit's own known_hosts file: only the key the user pinned is accepted. */
   knownHostsFile: string
+  /** A key reserved for Orbit: when set, it is the only identity offered. */
+  identityFile?: string | null
 }
 
 /**
@@ -37,6 +39,7 @@ export function sshArgs(t: SshTarget, remoteCommand: string): string[] {
     '-o', 'ServerAliveInterval=15',
     '-o', 'ServerAliveCountMax=3',
     '-o', 'ConnectTimeout=10',
+    ...(t.identityFile ? ['-i', t.identityFile, '-o', 'IdentitiesOnly=yes'] : []),
     '-p', String(t.port),
     t.user ? `${t.user}@${t.host}` : t.host,
     remoteCommand,
@@ -99,17 +102,28 @@ export function localSocketTransport(runtimeHome: string): RuntimeTransport {
   return { write: (l) => sock.writable && sock.write(l + '\n'), onLine: (cb) => lines.push(cb), onClose: (cb) => closes.push(cb), close: () => sock.end() }
 }
 
+/** A refusal from the runtime itself (definitive), as opposed to a lost connection (unknown outcome). */
+export class RuntimeRpcError extends Error {
+  constructor(
+    readonly code: number,
+    message: string,
+  ) {
+    super(message)
+  }
+}
+
 /** JSON-RPC client. Requests time out; pushed events are delivered in order. */
 export class RuntimeClient {
   private nextId = 1
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
   private eventListeners = new Set<(e: RuntimeEvent) => void>()
+  private liveListeners = new Set<(e: LiveEvent) => void>()
   private closeListeners = new Set<(reason: string) => void>()
   closed = false
 
   constructor(private transport: RuntimeTransport) {
     transport.onLine((line) => {
-      let msg: { id?: number; method?: string; params?: unknown; result?: unknown; error?: { message: string } }
+      let msg: { id?: number; method?: string; params?: unknown; result?: unknown; error?: { code?: number; message: string } }
       try {
         msg = JSON.parse(line)
       } catch {
@@ -119,17 +133,21 @@ export class RuntimeClient {
         for (const l of this.eventListeners) l(msg.params as RuntimeEvent)
         return
       }
-      if (msg.id == null) return
-      const p = this.pending.get(msg.id)
-      if (msg.id === 0 && msg.error) {
-        // Auth refused.
-        for (const q of this.pending.values()) q.reject(new Error(msg.error.message))
+      if (msg.method === 'live') {
+        for (const l of this.liveListeners) l(msg.params as LiveEvent)
         return
       }
+      if (msg.id == null) return
+      if (msg.id === 0 && msg.error) {
+        // Local token refused.
+        for (const q of this.pending.values()) q.reject(new RuntimeRpcError(msg.error.code ?? 401, msg.error.message))
+        return
+      }
+      const p = this.pending.get(msg.id)
       if (!p) return
       this.pending.delete(msg.id)
       clearTimeout(p.timer)
-      if (msg.error) p.reject(new Error(msg.error.message))
+      if (msg.error) p.reject(new RuntimeRpcError(msg.error.code ?? 500, msg.error.message))
       else p.resolve(msg.result)
     })
     transport.onClose((reason) => {
@@ -159,6 +177,11 @@ export class RuntimeClient {
   onEvent(cb: (e: RuntimeEvent) => void): () => void {
     this.eventListeners.add(cb)
     return () => this.eventListeners.delete(cb)
+  }
+
+  onLive(cb: (e: LiveEvent) => void): () => void {
+    this.liveListeners.add(cb)
+    return () => this.liveListeners.delete(cb)
   }
 
   onClose(cb: (reason: string) => void): () => void {

@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { and, asc, desc, eq, inArray } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm'
 import { TERMINAL_MISSION_STATUSES } from '@shared/mission-states'
 import type {
   Agent,
@@ -27,6 +27,12 @@ import type { ProviderRegistry } from '../providers'
 import { newId, nowIso, OrbitError } from '../util'
 import { handoffPrompt, parseResult, planningPrompt, stripProtocol, synthesisPrompt, validatePlan, type PlanTask } from './protocol'
 import { addWorktree, branchDiff, commitAll, conflictsBetween, diffStat, headRef, mergeBranch, removeWorktree, repoRoot } from './worktrees'
+
+/** Orbit Desktop: runs whose companions all live on one runtime are coordinated there. */
+export interface ConstellationRemote {
+  launch(def: ConstellationDefinition, run: ConstellationRun, goal: string, origin: 'user' | 'automation'): void
+  cancel(run: ConstellationRun): void
+}
 
 export const DEFAULT_LIMITS: ConstellationLimits = { maxDepth: 2, maxSubtasks: 8, maxParallel: 2, maxDurationMin: 60, maxTokens: 2_000_000, maxBudgetUsd: 5 }
 const ACTIVE_RUN: ConstellationRunStatus[] = ['planning', 'running', 'synthesizing']
@@ -63,6 +69,7 @@ interface RunState {
  */
 export class ConstellationEngine {
   private active = new Map<string, RunState>()
+  remote: ConstellationRemote | null = null
   /** Set on shutdown: drive loops still unwinding must not write to the closed database. */
   private disposed = false
 
@@ -255,7 +262,23 @@ export class ConstellationEngine {
       createdAt: r.createdAt,
       startedAt: r.startedAt,
       finishedAt: r.finishedAt,
+      machineId: r.machineId ?? null,
     }
+  }
+
+  /**
+   * Where a run executes: on this host, or on the one runtime machine where the coordinator
+   * and every member are placed. Mixed placements are refused (a remote coordinator can't
+   * reach a companion on the Mac, and a Mac coordinator would stop with the Mac).
+   */
+  placement(def: ConstellationDefinition): string | null {
+    const places = new Set(def.members.map((m) => {
+      const a = this.agents.get(m.agentId)
+      return a.runtime === 'remote' ? `m:${a.machineId}` : 'local'
+    }))
+    if (places.size > 1) throw new OrbitError('validation', 'Tous les compagnons de cette constellation doivent travailler au même endroit (ce Mac, ou la même machine distante). Déplacez-les depuis leur profil.')
+    const only = [...places][0]!
+    return only === 'local' ? null : only.slice(2)
   }
 
   private toWorkspace(w: typeof agentWorkspaces.$inferSelect): AgentWorkspace {
@@ -273,7 +296,7 @@ export class ConstellationEngine {
   // Runs: commands
 
   /** Starts a run. `idempotencyKey` prevents a double start (scheduler, double click). */
-  launch(constellationId: string, goal: string, opts: { origin?: 'user' | 'automation'; idempotencyKey?: string } = {}): ConstellationRun {
+  launch(constellationId: string, goal: string, opts: { origin?: 'user' | 'automation'; idempotencyKey?: string; id?: string } = {}): ConstellationRun {
     const def = this.get(constellationId)
     if (opts.idempotencyKey) {
       const existing = this.db.select().from(constellationRuns).where(eq(constellationRuns.idempotencyKey, opts.idempotencyKey)).get()
@@ -281,11 +304,20 @@ export class ConstellationEngine {
     }
     const coordinator = this.agents.get(def.coordinatorAgentId)
     if (!coordinator.enabled) throw new OrbitError('forbidden', `${coordinator.name} (coordinateur) est désactivé.`)
-    const id = newId()
+    const machineId = this.remote ? this.placement(def) : null
+    if (machineId && def.workspace && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(def.workspace)) throw new OrbitError('validation', 'Sur une machine distante, le dossier de la constellation est un nom de projet (sans chemin).')
+    const id = opts.id ?? newId()
+    if (this.db.select({ id: constellationRuns.id }).from(constellationRuns).where(eq(constellationRuns.id, id)).get()) return this.run(id)
     this.db
       .insert(constellationRuns)
-      .values({ id, constellationId, goal, status: 'planning', coordinatorAgentId: def.coordinatorAgentId, workspace: def.workspace, limits: def.limits, origin: opts.origin ?? 'user', idempotencyKey: opts.idempotencyKey ?? null, createdAt: nowIso(), startedAt: nowIso() })
+      .values({ id, constellationId, goal, status: 'planning', coordinatorAgentId: def.coordinatorAgentId, workspace: def.workspace, limits: def.limits, origin: opts.origin ?? 'user', idempotencyKey: opts.idempotencyKey ?? null, createdAt: nowIso(), startedAt: nowIso(), machineId })
       .run()
+    if (machineId) {
+      // Coordinated by the runtime: this row is the copy it will keep up to date.
+      this.remote!.launch(def, this.run(id), goal, opts.origin ?? 'user')
+      this.bus.invalidate('constellations')
+      return this.run(id)
+    }
     this.journal.activity({ type: 'constellation.started', agentId: coordinator.id, title: `Constellation « ${def.name} » en route`, detail: goal.slice(0, 200) })
     this.bus.invalidate('constellations', 'missions')
     this.spawnDrive(id)
@@ -294,6 +326,10 @@ export class ConstellationEngine {
 
   cancel(runId: string): ConstellationRun {
     const run = this.run(runId)
+    if (run.machineId && this.remote) {
+      this.remote.cancel(run)
+      return run
+    }
     const state = this.active.get(runId)
     if (state) state.controller.abort()
     for (const t of this.tasks(runId)) {
@@ -311,6 +347,7 @@ export class ConstellationEngine {
    */
   resume(runId: string): ConstellationRun {
     const run = this.run(runId)
+    if (run.machineId && this.remote) throw new OrbitError('validation', 'Une constellation distante interrompue ne reprend pas automatiquement : relancez-la (les résultats obtenus restent consultables).')
     if (this.active.has(runId)) throw new OrbitError('conflict', 'Cette constellation est déjà en cours.')
     if (!['interrupted', 'failed', 'cancelled'].includes(run.status)) throw new OrbitError('conflict', 'Seule une exécution interrompue, échouée ou arrêtée peut reprendre.')
     this.db.update(constellationRuns).set({ status: 'running', error: null, finishedAt: null }).where(eq(constellationRuns.id, runId)).run()
@@ -322,9 +359,10 @@ export class ConstellationEngine {
 
   /** On boot nothing runs: open runs become « interrupted » (never auto-relaunched). */
   recoverInterrupted(): void {
-    const open = this.db.select().from(constellationRuns).where(inArray(constellationRuns.status, ACTIVE_RUN)).all()
+    // Runs coordinated by a runtime are left alone: their runtime reports what happened.
+    const open = this.db.select().from(constellationRuns).where(and(inArray(constellationRuns.status, ACTIVE_RUN), isNull(constellationRuns.machineId))).all()
     for (const r of open) {
-      this.db.update(constellationRuns).set({ status: 'interrupted', error: 'Interrompue : Orbit a été fermé pendant l’exécution. Les résultats déjà obtenus sont conservés.', finishedAt: nowIso() }).where(eq(constellationRuns.id, r.id)).run()
+      this.db.update(constellationRuns).set({ status: 'interrupted', error: this.interruptedNote, finishedAt: nowIso() }).where(eq(constellationRuns.id, r.id)).run()
       for (const t of this.tasks(r.id)) if (t.status === 'todo') this.missions.skip(t.missionId, 'Interrompue avant son démarrage.')
     }
   }
@@ -332,6 +370,8 @@ export class ConstellationEngine {
   isActive(runId: string): boolean {
     return this.active.has(runId)
   }
+
+  interruptedNote = 'Interrompue : Orbit a été fermé pendant l’exécution. Les résultats déjà obtenus sont conservés.'
 
   cancelAll(): void {
     for (const id of [...this.active.keys()]) this.cancel(id)

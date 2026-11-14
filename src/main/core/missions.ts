@@ -1,12 +1,11 @@
 import { existsSync, statSync } from 'node:fs'
-import { and, asc, count, desc, eq, inArray } from 'drizzle-orm'
+import { and, asc, count, desc, eq, inArray, isNull } from 'drizzle-orm'
 import { canTransition, MISSION_STATUS_LABELS } from '@shared/mission-states'
 import type { Agent, AgentPermissions, ApprovalRequest, ExecutionEvent, GrantScope, Mission, MissionDetail, MissionPriority, MissionStatus, RecentFileChange, StructuredResult, SubtaskSpec } from '@shared/types'
 import type { OrbitDb } from '../infra/db/client'
 import { toApproval, toExecution, toExecutionEvent, toFileChange, toInventory, toMission, toToolCall } from '../infra/db/mappers'
-import { agents, approvalRequests, executionEvents, fileChanges, fileInventories, missionExecutions, missions, toolCalls } from '../infra/db/schema'
+import { approvalRequests, executionEvents, fileChanges, fileInventories, missionExecutions, missions, toolCalls } from '../infra/db/schema'
 import { isSafeProjectName } from '../../runtime/protocol'
-import type { AgentEngine } from './engine/types'
 import type { StreamChunk } from '../infra/providers'
 import type { AgentRunner } from './agent-runner'
 import type { AgentManager } from './agents'
@@ -20,8 +19,19 @@ import type { UsageTracker } from './usage'
 import { newId, nowIso, OrbitError, shortId } from './util'
 
 const OUTPUT_FLUSH_MS = 1200
-const REMOTE_PENDING_PREFIX = 'En attente de resynchronisation'
-const REMOTE_PENDING = `${REMOTE_PENDING_PREFIX} : Orbit a été fermé ou a perdu la connexion ; la mission a pu continuer sur la machine distante. Son résultat sera récupéré à la reconnexion.`
+
+/**
+ * Missions of a companion placed on a runtime are executed and owned by that
+ * runtime. Orbit Desktop keeps a synced copy and turns every action into a command.
+ */
+export interface MissionRemote {
+  submit(mission: Mission, origin: 'user' | 'automation', followUp?: string): void
+  cancel(mission: Mission): void
+  resolveApproval(row: ApprovalRequest, approve: boolean, scope: GrantScope): void
+}
+
+/** Runtime host only: may defer (capacity) or block (budget) a start. */
+export type Admission = (agent: Agent, mission: Mission) => { defer: string } | { block: string } | null
 
 export function intersectPermissions(a: AgentPermissions, b: AgentPermissions | null | undefined): AgentPermissions {
   if (!b) return { ...a }
@@ -49,8 +59,14 @@ function engineRules(agent: Agent, workspace: string): string {
 
 export class MissionManager {
   private running = new Map<string, AbortController>()
-  /** Remote companions run on a machine's runtime (set by the runtime when remote support exists). */
-  remoteEngine: ((agent: Agent) => AgentEngine) | null = null
+  /** Missions admitted later (runtime at capacity), oldest first. */
+  readonly deferred = new Map<string, { origin: 'user' | 'automation'; followUp?: string }>()
+  /** Orbit Desktop: routes runtime-owned missions to their machine. */
+  remote: MissionRemote | null = null
+  /** Orbit Runtime: machine-wide limits (concurrency, budgets). */
+  admission: Admission | null = null
+  /** Wording of « interrupted » after a restart (Orbit Desktop vs runtime). */
+  interruptedNote = 'Interrompue : Orbit a été fermé pendant l’exécution. Vous pouvez poursuivre la mission, la session est conservée.'
   private idleWaiters = new Map<string, (() => void)[]>()
 
   constructor(
@@ -131,6 +147,9 @@ export class MissionManager {
   // Commands
 
   create(input: {
+    /** Global identifiers chosen by Orbit Desktop for a mission it sends to a runtime. */
+    id?: string
+    shortId?: string
     title: string
     description: string
     agentId: string
@@ -150,9 +169,10 @@ export class MissionManager {
     let workspace: string | null = null
     if (agent.runtime === 'remote') {
       // On a remote machine the « folder » is a project name under the runtime's home.
-      if (!engine) throw new OrbitError('validation', 'Seuls les moteurs agents (Claude Code, Codex) peuvent travailler sur une machine distante.')
-      if (!agent.workingDirectory || !isSafeProjectName(agent.workingDirectory)) throw new OrbitError('validation', `Choisissez le projet distant de ${agent.name} (nom simple, sans chemin).`)
-      workspace = agent.workingDirectory
+      if (!agent.machineId) throw new OrbitError('validation', `${agent.name} n’a pas de machine d’exécution.`)
+      if (!this.remote) throw new OrbitError('provider', 'Exécution distante indisponible.')
+      if (engine && (!agent.workingDirectory || !isSafeProjectName(agent.workingDirectory))) throw new OrbitError('validation', `Choisissez le projet distant de ${agent.name} (nom simple, sans chemin).`)
+      workspace = engine ? agent.workingDirectory : null
     } else if (engine) {
       if (input.workspace) {
         this.checkWorkspace(input.workspace, agent)
@@ -160,9 +180,10 @@ export class MissionManager {
       } else workspace = this.requireWorkspace(agent)
     }
     const ts = nowIso()
+    if (input.id && this.db.select({ id: missions.id }).from(missions).where(eq(missions.id, input.id)).get()) throw new OrbitError('conflict', 'Cette mission existe déjà.')
     const row = {
-      id: newId(),
-      shortId: this.uniqueShortId(),
+      id: input.id ?? newId(),
+      shortId: input.shortId && !this.db.select({ id: missions.id }).from(missions).where(eq(missions.shortId, input.shortId)).get() ? input.shortId : this.uniqueShortId(),
       title: input.title,
       description: input.description,
       agentId: input.agentId,
@@ -175,6 +196,7 @@ export class MissionManager {
       depth: input.depth ?? 0,
       subtask: input.subtask ?? null,
       permissionsOverride: input.permissionsOverride ?? null,
+      remoteMachineId: agent.runtime === 'remote' ? agent.machineId : null,
       createdAt: ts,
       updatedAt: ts,
     }
@@ -222,6 +244,11 @@ export class MissionManager {
 
   start(id: string, origin: 'user' | 'automation', followUp?: string): Mission {
     const mission = this.get(id)
+    if (mission.remoteMachineId) {
+      if (!this.remote) throw new OrbitError('provider', 'Exécution distante indisponible.')
+      this.remote.submit(mission, origin, followUp)
+      return this.get(id)
+    }
     if (this.running.has(id)) throw new OrbitError('conflict', 'Cette mission est déjà en cours.')
     const agent = this.agents.get(mission.agentId)
     const engine = mission.engine ? this.providers.engine(mission.engine) : null
@@ -245,7 +272,8 @@ export class MissionManager {
       const from = adapter.secretFrom ? this.providers.adapter(adapter.secretFrom).name : adapter.name
       throw new OrbitError('provider', `Connectez ${from} pour que ${agent.name} puisse travailler.`)
     }
-    const blocked = this.usage.budgetBlock(agent)
+    const admitted = this.admission?.(agent, mission) ?? null
+    const blocked = this.usage.budgetBlock(agent) ?? (admitted && 'block' in admitted ? admitted.block : null)
     if (blocked) {
       this.journal.activity({ type: 'budget.reached', level: 'warning', agentId: agent.id, missionId: id, title: 'Mission bloquée par le budget', detail: blocked })
       this.journal.notify('budget', 'Budget atteint', blocked, `/missions/${id}`)
@@ -272,6 +300,14 @@ export class MissionManager {
       return this.get(id)
     }
 
+    if (admitted && 'defer' in admitted) {
+      // Machine at capacity: stays « à faire », started by the host when a slot frees up.
+      this.deferred.set(id, { origin, followUp })
+      this.event(id, 'queue', 'warning', admitted.defer)
+      this.bus.invalidate('missions')
+      return this.get(id)
+    }
+    this.deferred.delete(id)
     this.transition(mission, 'running', { startedAt: mission.startedAt && followUp ? mission.startedAt : nowIso(), finishedAt: null, error: null, ...(followUp ? {} : { result: null }) })
     void this.execute(id, followUp).catch((err) => this.journal.activity({ type: 'mission.failed', level: 'error', missionId: id, title: 'Erreur interne d’exécution', detail: String(err) }))
     return this.get(id)
@@ -280,6 +316,10 @@ export class MissionManager {
   /** Continues an agent mission in the same engine session (resumes after a restart too). */
   followUp(id: string, prompt: string, origin: 'user' | 'automation' = 'user'): Mission {
     const mission = this.get(id)
+    if (mission.remoteMachineId) {
+      if (mission.status === 'running' || mission.status === 'approval_required') throw new OrbitError('conflict', 'Le compagnon travaille encore sur cette mission.')
+      return this.start(id, origin, prompt)
+    }
     // Constellation coordinators on a chat provider get their full context in the prompt itself.
     if (!mission.engine && !mission.constellationRunId) throw new OrbitError('validation', 'Seules les missions confiées à un moteur agent (Claude Code, Claude Agent SDK, Codex) peuvent être poursuivies.')
     if (this.running.has(id)) throw new OrbitError('conflict', 'Le compagnon travaille encore sur cette mission.')
@@ -290,6 +330,14 @@ export class MissionManager {
 
   cancel(id: string): Mission {
     const mission = this.get(id)
+    if (mission.remoteMachineId && this.remote) {
+      this.remote.cancel(mission)
+      return this.get(id)
+    }
+    if (this.deferred.delete(id) && mission.status === 'todo') {
+      this.transition(mission, 'cancelled', { finishedAt: nowIso() })
+      return this.get(id)
+    }
     const controller = this.running.get(id)
     if (controller) {
       this.runner.denyAllFor(id)
@@ -334,6 +382,11 @@ export class MissionManager {
     const row = this.db.select().from(approvalRequests).where(eq(approvalRequests.id, id)).get()
     if (!row) throw new OrbitError('not_found', 'Demande introuvable.')
     if (row.status !== 'pending') throw new OrbitError('conflict', 'Cette demande a déjà été traitée.')
+    if (row.machineId && this.remote) {
+      // Decided on the runtime that holds the paused operation; this copy updates when it answers.
+      this.remote.resolveApproval(toApproval(row), approve, scope)
+      return toApproval(row)
+    }
     if (row.kind === 'tool_use' && !this.runner.hasPendingApproval(id)) {
       this.db.update(approvalRequests).set({ status: 'expired', resolvedAt: nowIso() }).where(eq(approvalRequests.id, id)).run()
       this.bus.invalidate('approvals')
@@ -389,36 +442,19 @@ export class MissionManager {
    */
   recoverInterrupted(): void {
     const ts = nowIso()
-    const open = this.db.select().from(missionExecutions).where(eq(missionExecutions.status, 'running')).all()
+    // Copies of runtime-owned missions are never touched here: their runtime says what happened.
+    const open = this.db.select({ ex: missionExecutions }).from(missionExecutions).innerJoin(missions, eq(missions.id, missionExecutions.missionId)).where(and(eq(missionExecutions.status, 'running'), isNull(missions.remoteMachineId))).all().map((r) => r.ex)
     for (const ex of open) {
-      const remote = this.db.select({ r: agents.runtime }).from(missions).innerJoin(agents, eq(agents.id, missions.agentId)).where(eq(missions.id, ex.missionId)).get()?.r === 'remote'
       this.db
         .update(missions)
-        .set({ status: 'failed', error: remote ? REMOTE_PENDING : 'Interrompue : Orbit a été fermé pendant l’exécution. Vous pouvez poursuivre la mission, la session est conservée.', finishedAt: ts, updatedAt: ts })
+        .set({ status: 'failed', error: this.interruptedNote, finishedAt: ts, updatedAt: ts })
         .where(and(eq(missions.id, ex.missionId), inArray(missions.status, ['running', 'waiting', 'approval_required'])))
         .run()
       this.db.update(missionExecutions).set({ status: 'failed', error: 'Interrompue', finishedAt: ts }).where(eq(missionExecutions.id, ex.id)).run()
     }
-    this.db.update(approvalRequests).set({ status: 'expired', resolvedAt: ts }).where(and(eq(approvalRequests.kind, 'tool_use'), eq(approvalRequests.status, 'pending'))).run()
-    this.db.update(toolCalls).set({ status: 'cancelled', finishedAt: ts }).where(inArray(toolCalls.status, ['running', 'awaiting_approval'])).run()
-  }
-
-  /**
-   * A remote mission Orbit lost track of (connection lost, Orbit restarted) finished on its
-   * machine: its real outcome replaces the « waiting for resync » state, once.
-   */
-  applyRemoteOutcome(executionId: string, outcome: { status: string; result: string | null; error: string | null }): void {
-    const ex = this.db.select().from(missionExecutions).where(eq(missionExecutions.id, executionId)).get()
-    if (!ex) return
-    const m = this.db.select().from(missions).where(eq(missions.id, ex.missionId)).get()
-    if (!m || this.running.has(m.id) || !(m.error ?? '').startsWith(REMOTE_PENDING_PREFIX)) return
-    const ts = nowIso()
-    const status = outcome.status === 'done' ? 'done' : outcome.status === 'cancelled' ? 'cancelled' : 'failed'
-    this.db.update(missions).set({ status, result: outcome.result ?? m.result, error: status === 'failed' ? (outcome.error ?? 'Échec sur la machine distante.') : null, updatedAt: ts, finishedAt: ts }).where(eq(missions.id, m.id)).run()
-    this.db.update(missionExecutions).set({ status: status === 'done' ? 'done' : status, error: outcome.error, finishedAt: ts }).where(eq(missionExecutions.id, executionId)).run()
-    this.event(m.id, executionId, status === 'done' ? 'completed' : status === 'cancelled' ? 'cancelled' : 'failed', `Résultat récupéré auprès de la machine distante : ${status === 'done' ? 'mission terminée' : outcome.error ?? status}.`)
-    this.journal.activity({ type: status === 'done' ? 'mission.completed' : 'mission.failed', level: status === 'done' ? 'success' : 'error', agentId: m.agentId, missionId: m.id, title: 'Mission distante synchronisée', detail: m.title })
-    this.bus.invalidate('missions', 'agents')
+    this.db.update(approvalRequests).set({ status: 'expired', resolvedAt: ts }).where(and(eq(approvalRequests.kind, 'tool_use'), eq(approvalRequests.status, 'pending'), isNull(approvalRequests.machineId))).run()
+    const local = this.db.select({ id: missions.id }).from(missions).where(isNull(missions.remoteMachineId))
+    this.db.update(toolCalls).set({ status: 'cancelled', finishedAt: ts }).where(and(inArray(toolCalls.status, ['running', 'awaiting_approval']), inArray(toolCalls.missionId, local))).run()
   }
 
   // Execution engine
@@ -438,7 +474,7 @@ export class MissionManager {
     const controller = new AbortController()
     this.running.set(missionId, controller)
     this.agents.setStatus(agent.id, 'working', mission.title)
-    const engine = mission.engine ? (agent.runtime === 'remote' && this.remoteEngine ? this.remoteEngine(agent) : this.providers.engine(mission.engine)) : null
+    const engine = mission.engine ? this.providers.engine(mission.engine) : null
     // A delegated mission never gets more than its companion: intersection, never union.
     const effectivePerms = intersectPermissions(agent.permissions, mission.permissionsOverride)
     if (followUp) this.event(missionId, executionId, 'user', followUp)
