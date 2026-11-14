@@ -140,6 +140,8 @@ export const missions = sqliteTable(
     subtask: text('subtask', { mode: 'json' }).$type<SubtaskSpec>(),
     /** Permissions for this mission when lower than the companion's (delegation ceiling). */
     permissionsOverride: text('permissions_override', { mode: 'json' }).$type<AgentPermissions>(),
+    /** Set when the mission is owned by a remote runtime (this row is a synced copy). */
+    remoteMachineId: text('remote_machine_id'),
     resultData: text('result_data', { mode: 'json' }).$type<StructuredResult>(),
     engine: text('engine'),
     sessionId: text('session_id'),
@@ -327,6 +329,11 @@ export const approvalRequests = sqliteTable(
     status: text('status').notNull().default('pending'),
     createdAt: createdAt(),
     resolvedAt: text('resolved_at'),
+    /** Owning runtime (synced copy), operation fingerprint the answer is bound to, deadline. */
+    machineId: text('machine_id'),
+    operationHash: text('operation_hash'),
+    expiresAt: text('expires_at'),
+    resolvedBy: text('resolved_by'),
   },
   (t) => [index('approvals_status_idx').on(t.status)],
 )
@@ -383,6 +390,8 @@ export const usageRecords = sqliteTable(
     equivalentUsd: real('equivalent_usd'),
     source: text('source').notNull(),
     createdAt: createdAt(),
+    /** Consumption recorded on a remote runtime. */
+    machineId: text('machine_id'),
   },
   (t) => [index('usage_created_idx').on(t.createdAt), index('usage_agent_idx').on(t.agentId)],
 )
@@ -421,8 +430,10 @@ export const notifications = sqliteTable(
     route: text('route'),
     read: integer('read', { mode: 'boolean' }).notNull().default(false),
     createdAt: createdAt(),
+    /** One notification per fact (remote replays, reconnections). */
+    dedupeKey: text('dedupe_key'),
   },
-  (t) => [index('notifications_created_idx').on(t.createdAt)],
+  (t) => [index('notifications_created_idx').on(t.createdAt), uniqueIndex('notifications_dedupe_unique').on(t.dedupeKey)],
 )
 
 export const activityEvents = sqliteTable(
@@ -518,6 +529,8 @@ export const constellationRuns = sqliteTable(
     createdAt: createdAt(),
     startedAt: text('started_at'),
     finishedAt: text('finished_at'),
+    /** Runtime that coordinates this run (synced copy on the Mac). */
+    machineId: text('machine_id'),
   },
   (t) => [index('constellation_runs_def_idx').on(t.constellationId, t.createdAt), uniqueIndex('constellation_runs_idem_unique').on(t.idempotencyKey)],
 )
@@ -598,6 +611,17 @@ export const automationDefinitions = sqliteTable(
     lastRunAt: text('last_run_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
+    /** The one scheduler allowed to fire it: 'local' or a runtime machine id. */
+    schedulerOwner: text('scheduler_owner').notNull().default('local'),
+    /** active | transferring (no scheduler fires it until the transfer is confirmed). */
+    ownerState: text('owner_state').notNull().default('active'),
+    /** Machine a transfer is heading to (owner_state = transferring). */
+    pendingOwner: text('pending_owner'),
+    configVersion: integer('config_version').notNull().default(1),
+    maxDurationMin: integer('max_duration_min'),
+    budgetUsd: real('budget_usd'),
+    /** notify | pause (pause the automation after a failed run). */
+    failurePolicy: text('failure_policy').notNull().default('notify'),
   },
   (t) => [index('automations_next_idx').on(t.status, t.nextRunAt)],
 )
@@ -638,6 +662,7 @@ export const automationRuns = sqliteTable(
     startedAt: text('started_at'),
     finishedAt: text('finished_at'),
     createdAt: createdAt(),
+    machineId: text('machine_id'),
   },
   (t) => [uniqueIndex('automation_runs_idem_unique').on(t.idempotencyKey), index('automation_runs_auto_idx').on(t.automationId, t.createdAt)],
 )
@@ -665,7 +690,69 @@ export const runtimeMachines = sqliteTable('runtime_machines', {
   engines: text('engines', { mode: 'json' }).$type<{ id: string; available: boolean; detail: string }[]>(),
   cursor: integer('cursor').notNull().default(0),
   createdAt: createdAt(),
+  /** Runtime identity (Ed25519) pinned by the user, and this client's pairing. */
+  runtimeId: text('runtime_id'),
+  runtimeKey: text('runtime_key'),
+  runtimeKeyFingerprint: text('runtime_key_fingerprint'),
+  clientId: text('client_id'),
+  pairedAt: text('paired_at'),
+  schemaVersion: text('schema_version'),
+  health: text('health', { mode: 'json' }).$type<Record<string, unknown>>(),
+  metrics: text('metrics', { mode: 'json' }).$type<Record<string, unknown>>(),
+  lastSyncedAt: text('last_synced_at'),
+  syncError: text('sync_error'),
+  limits: text('limits', { mode: 'json' }).$type<Record<string, unknown>>(),
+  /** Private key reserved for Orbit (optional): only this key is offered to the server. */
+  sshIdentityFile: text('ssh_identity_file'),
 })
+
+/**
+ * Commands sent to a runtime. A command whose answer was lost (connection cut) is
+ * resent after reconnection with the same request id: the runtime returns the stored
+ * result instead of running it twice.
+ */
+export const remoteCommands = sqliteTable(
+  'remote_commands',
+  {
+    requestId: text('request_id').primaryKey(),
+    machineId: text('machine_id')
+      .notNull()
+      .references(() => runtimeMachines.id, { onDelete: 'cascade' }),
+    method: text('method').notNull(),
+    params: text('params', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+    /** pending (sent or not, answer unknown) | done | failed (definitive refusal) */
+    status: text('status').notNull().default('pending'),
+    result: text('result', { mode: 'json' }).$type<unknown>(),
+    error: text('error'),
+    attempts: integer('attempts').notNull().default(0),
+    entityKind: text('entity_kind'),
+    entityId: text('entity_id'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index('remote_commands_machine_idx').on(t.machineId, t.status)],
+)
+
+/** Artifacts produced on a runtime (metadata synced; content fetched on demand, hash-checked). */
+export const remoteArtifacts = sqliteTable(
+  'remote_artifacts',
+  {
+    id: text('id').primaryKey(),
+    machineId: text('machine_id')
+      .notNull()
+      .references(() => runtimeMachines.id, { onDelete: 'cascade' }),
+    missionId: text('mission_id'),
+    agentId: text('agent_id'),
+    name: text('name').notNull(),
+    kind: text('kind').notNull(),
+    size: integer('size').notNull(),
+    sha256: text('sha256').notNull(),
+    status: text('status').notNull(),
+    localPath: text('local_path'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('remote_artifacts_mission_idx').on(t.missionId)],
+)
 
 export const remoteMissions = sqliteTable(
   'remote_missions',
