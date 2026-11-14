@@ -105,6 +105,9 @@ const host: HostApi = {
     }
     return { enabled: supported ? app.getLoginItemSettings().openAtLogin : false, supported }
   },
+  revealPath(path) {
+    shell.showItemInFolder(path)
+  },
   async chooseDirectory() {
     const res = await dialog.showOpenDialog(mainWindow!, { properties: ['openDirectory', 'createDirectory'], message: 'Dossier de travail du compagnon' })
     return res.canceled ? null : (res.filePaths[0] ?? null)

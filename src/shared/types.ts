@@ -229,6 +229,8 @@ export interface Mission {
   subtask: SubtaskSpec | null
   permissionsOverride: AgentPermissions | null
   resultData: StructuredResult | null
+  /** Owned by this runtime machine; the row is a synced copy (actions become commands). */
+  remoteMachineId: string | null
   createdAt: string
   updatedAt: string
   startedAt: string | null
@@ -381,6 +383,11 @@ export interface ApprovalRequest {
   status: 'pending' | 'approved' | 'denied' | 'expired'
   createdAt: string
   resolvedAt: string | null
+  /** Held by this runtime machine (the answer is sent there, bound to operationHash). */
+  machineId: string | null
+  operationHash: string | null
+  expiresAt: string | null
+  resolvedBy: string | null
 }
 
 /** What a companion is doing right now. Ephemeral, never invented: derived from engine events. */
@@ -434,6 +441,10 @@ export type ActivityType =
   | 'automation.skipped'
   | 'runtime.connected'
   | 'runtime.disconnected'
+  | 'automation.paused'
+  | 'automation.transferred'
+  | 'runtime.paired'
+  | 'runtime.error'
 
 export type ActivityLevel = 'info' | 'success' | 'warning' | 'error'
 
@@ -529,7 +540,7 @@ export interface AgentMemory {
 
 export interface OrbitNotification {
   id: string
-  kind: 'mission_done' | 'mission_failed' | 'approval' | 'budget' | 'provider' | 'agent'
+  kind: 'mission_done' | 'mission_failed' | 'approval' | 'budget' | 'provider' | 'agent' | 'machine'
   title: string
   body: string
   route: string | null
@@ -768,6 +779,8 @@ export interface ConstellationRun {
   createdAt: string
   startedAt: string | null
   finishedAt: string | null
+  /** Coordinated by this runtime machine (synced copy). */
+  machineId: string | null
 }
 
 export interface ExecutionHandoff {
@@ -848,6 +861,14 @@ export interface Automation {
   lastRun: AutomationRun | null
   createdAt: string
   updatedAt: string
+  /** The one scheduler allowed to fire it ('local' or a machine id). */
+  schedulerOwner: string
+  ownerState: 'active' | 'transferring'
+  pendingOwner: string | null
+  configVersion: number
+  maxDurationMin: number | null
+  budgetUsd: number | null
+  failurePolicy: 'notify' | 'pause'
 }
 
 export interface AutomationRun {
@@ -862,9 +883,23 @@ export interface AutomationRun {
   startedAt: string | null
   finishedAt: string | null
   createdAt: string
+  /** Fired by this runtime machine. */
+  machineId: string | null
 }
 
 // Remote runtime
+
+export interface RemoteEngineStatus {
+  id: string
+  name?: string
+  available: boolean
+  detail: string
+  installed?: boolean
+  version?: string | null
+  authenticated?: boolean | 'unknown'
+  capabilities?: string[]
+  restrictions?: string[]
+}
 
 export interface RemoteMachine {
   id: string
@@ -881,7 +916,24 @@ export interface RemoteMachine {
   runtimeVersion: string | null
   protocol: number | null
   info: Record<string, string> | null
-  engines: { id: string; available: boolean; detail: string }[]
+  engines: RemoteEngineStatus[]
   runningMissions: number
   createdAt: string
+  // Runtime identity and pairing
+  /** Runtime identity pinned by the user (null until confirmed). */
+  runtimeId: string | null
+  runtimeKeyFingerprint: string | null
+  /** Identity presented by the runtime and not yet confirmed (first connection or changed key). */
+  pendingRuntimeKey: { runtimeId: string; fingerprint: string; changed: boolean } | null
+  paired: boolean
+  schemaVersion: string | null
+  health: import('./remote').HealthReport | null
+  metrics: import('./remote').MetricsReport | null
+  limits: import('./remote').MachineLimits | null
+  lastSyncedAt: string | null
+  syncError: string | null
+  pendingApprovals: number
+  activeAutomations: number
+  remoteCompanions: number
+  sshIdentityFile: string | null
 }

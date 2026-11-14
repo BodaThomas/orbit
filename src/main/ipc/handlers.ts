@@ -14,6 +14,8 @@ export interface HostApi {
   setMode(mode: 'real' | 'demo'): Promise<Bootstrap>
   openExternal(url: string): Promise<void>
   chooseDirectory(): Promise<string | null>
+  /** Shows a file Orbit itself wrote (a downloaded artifact) in the Finder. */
+  revealPath(path: string): void
   /** Reads (no argument) or sets « open Orbit at login », always on an explicit user action. */
   launchAtLogin(enabled?: boolean): { enabled: boolean; supported: boolean }
 }
@@ -144,6 +146,16 @@ export const handlers: Handlers = {
   'runtime.connect': (i, h) => h.runtime().remote.connect(i.id),
   'runtime.disconnect': (i, h) => h.runtime().remote.disconnect(i.id),
   'runtime.revoke': (i, h) => h.runtime().remote.revoke(i.id),
+  'runtime.confirmIdentity': (i, h) => h.runtime().remote.confirmRuntimeIdentity(i.id, i.fingerprint),
+  'runtime.engines': (i, h) => h.runtime().remote.engines(i.id, i.refresh),
+  'runtime.setLimits': (i, h) => h.runtime().remote.setLimits(i.id, i.limits),
+  'runtime.clients': (i, h) => h.runtime().remote.clients(i.id),
+  'runtime.events': (i, h) => h.runtime().remote.recentRuntimeEvents(i.id).map((e) => ({ seq: e.seq, kind: e.kind, at: e.at, data: e.data ?? null })),
+  'automations.transfer': (i, h) => h.runtime().remote.transferAutomation(i.id, i.to),
+  'automations.cancelTransfer': (i, h) => h.runtime().remote.cancelTransfer(i.id),
+  'artifacts.list': (i, h) => h.runtime().remote.artifacts(i.missionId),
+  'artifacts.fetch': (i, h) => h.runtime().remote.fetchArtifact(i.id),
+  'artifacts.reveal': async (i, h) => h.revealPath((await h.runtime().remote.fetchArtifact(i.id)).path),
 
   'security.status': (_i, h) => securityStatus(h.runtime()),
   'security.selfTest': (_i, h) => {

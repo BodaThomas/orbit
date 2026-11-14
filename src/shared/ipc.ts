@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { ArtifactMeta, EngineStatus } from './remote'
 import type {
   ActivityEvent,
   Agent,
@@ -142,6 +143,9 @@ export const automationInputSchema = z.object({
   missedPolicy: z.enum(['skip', 'run_once', 'ask']),
   maxRunsPerDay: z.number().int().min(1).max(500).nullable(),
   triggers: z.array(z.object({ kind: z.enum(['mission.completed', 'mission.failed', 'automation.completed']), sourceAgentId: id.nullable(), sourceAutomationId: id.nullable(), cooldownSec: z.number().int().min(60).max(86_400) })).max(5),
+  maxDurationMin: z.number().int().min(1).max(1440).nullable().optional(),
+  budgetUsd: z.number().min(0).max(10_000).nullable().optional(),
+  failurePolicy: z.enum(['notify', 'pause']).optional(),
 })
 
 const memoryKind = z.enum(['instruction', 'personal', 'fact', 'summary', 'document', 'mission'])
@@ -247,7 +251,7 @@ export const ipcSchemas = {
   'app.launchAtLogin': z.object({ enabled: z.boolean().optional() }),
 
   'runtime.list': z.void(),
-  'runtime.register': z.object({ name: z.string().trim().min(1).max(60), transport: z.enum(['ssh', 'local']), host: z.string().max(253).nullable(), user: z.string().max(32).nullable(), port: z.number().int().min(1).max(65535), runtimeHome: z.string().min(1).max(512) }),
+  'runtime.register': z.object({ name: z.string().trim().min(1).max(60), transport: z.enum(['ssh', 'local']), host: z.string().max(253).nullable(), user: z.string().max(32).nullable(), port: z.number().int().min(1).max(65535), runtimeHome: z.string().min(1).max(512), identityFile: z.string().max(1024).nullable().optional() }),
   'runtime.scanHostKey': z.object({ id }),
   'runtime.confirmHostKey': z.object({ id, fingerprint: z.string().max(200) }),
   'runtime.deployPlan': z.object({ id }),
@@ -255,6 +259,16 @@ export const ipcSchemas = {
   'runtime.connect': z.object({ id }),
   'runtime.disconnect': z.object({ id }),
   'runtime.revoke': z.object({ id }),
+  'runtime.confirmIdentity': z.object({ id, fingerprint: z.string().max(200) }),
+  'runtime.engines': z.object({ id, refresh: z.boolean().optional() }),
+  'runtime.setLimits': z.object({ id, limits: z.object({ maxConcurrentMissions: z.number().int().min(1).max(16), maxMissionDurationMin: z.number().int().min(1).max(1440), dailyBudgetUsd: z.number().min(0).max(10_000).nullable(), monthlyBudgetUsd: z.number().min(0).max(100_000).nullable() }) }),
+  'runtime.clients': z.object({ id }),
+  'runtime.events': z.object({ id }),
+  'automations.transfer': z.object({ id, to: z.string().min(1).max(64) }),
+  'automations.cancelTransfer': z.object({ id }),
+  'artifacts.list': z.object({ missionId: id }),
+  'artifacts.fetch': z.object({ id }),
+  'artifacts.reveal': z.object({ id }),
 
   'security.status': z.void(),
   'security.selfTest': z.void(),
@@ -350,7 +364,7 @@ export interface IpcOutputs {
   'automations.update': Automation
   'automations.delete': void
   'automations.setStatus': Automation
-  'automations.runNow': AutomationRun
+  'automations.runNow': AutomationRun | null
   'automations.confirmRun': AutomationRun
   'automations.preview': { next: string[]; error: string | null; description: string | null }
   'app.launchAtLogin': { enabled: boolean; supported: boolean }
@@ -364,6 +378,16 @@ export interface IpcOutputs {
   'runtime.connect': RemoteMachine
   'runtime.disconnect': void
   'runtime.revoke': void
+  'runtime.confirmIdentity': RemoteMachine
+  'runtime.engines': EngineStatus[]
+  'runtime.setLimits': RemoteMachine
+  'runtime.clients': { id: string; name: string; fingerprint: string; created_at: string; last_seen_at: string | null; revoked_at: string | null; self: boolean }[]
+  'runtime.events': { seq: number; kind: string; at: string; data: Record<string, unknown> | null }[]
+  'automations.transfer': Automation
+  'automations.cancelTransfer': Automation
+  'artifacts.list': RemoteArtifact[]
+  'artifacts.fetch': { path: string; preview: string | null }
+  'artifacts.reveal': void
 
   'security.status': SecurityStatus
   'security.selfTest': SecurityStatus
@@ -393,6 +417,9 @@ export type OrbitEvent =
   | { type: 'constellation.signal'; signal: ConstellationSignal }
   /** An action ran without confirmation (routine rule, persistent grant, engine classifier). */
   | { type: 'permission.auto'; agentId: string; agentName: string; missionId: string; title: string; via: 'policy' | 'grant' | 'engine'; category: string }
+
+/** A runtime artifact as Orbit Desktop knows it (metadata synced, content fetched on demand). */
+export type RemoteArtifact = ArtifactMeta & { machineId: string; localPath: string | null }
 
 export type InvalidateScope =
   | 'agents'
