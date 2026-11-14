@@ -10,6 +10,7 @@ import type {
   CostKind,
   ExecutionEvent,
   FileChange,
+  FileInventory,
   Message,
   Mission,
   MissionExecution,
@@ -34,7 +35,10 @@ export function toAgent(row: Row<typeof s.agents>, appearance: Appearance): Agen
     autonomy: row.autonomy,
     permissions: row.permissions,
     workingDirectory: row.workingDirectory,
-    runtime: 'local',
+    isolation: row.isolation === 'strict' ? 'strict' : 'standard',
+    effort: row.effort,
+    runtime: row.runtime === 'remote' ? 'remote' : 'local',
+    machineId: row.machineId,
     dailyBudgetUsd: row.dailyBudgetUsd,
     enabled: row.enabled,
     status: (row.enabled ? row.status : 'disabled') as AgentStatus,
@@ -107,7 +111,11 @@ export function toToolCall(row: Row<typeof s.toolCalls>): ToolCall {
 }
 
 export function toFileChange(row: Row<typeof s.fileChanges>): FileChange {
-  return { ...row, kind: row.kind as FileChange['kind'] }
+  return { ...row, kind: row.kind as FileChange['kind'], source: (row.source as FileChange['source']) ?? 'engine' }
+}
+
+export function toInventory(row: Row<typeof s.fileInventories>): FileInventory {
+  return { ...row, method: row.method as FileInventory['method'] }
 }
 
 export function toExecutionEvent(row: Row<typeof s.executionEvents>): ExecutionEvent {

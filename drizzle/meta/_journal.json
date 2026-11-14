@@ -15,6 +15,34 @@
       "when": 1794636151554,
       "tag": "0001_agent_engines",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1794640746129,
+      "tag": "0002_stabilization",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1794641920521,
+      "tag": "0003_constellations",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1794642785484,
+      "tag": "0004_automations",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1794643248888,
+      "tag": "0005_remote_runtime",
+      "breakpoints": true
     }
   ]
 }

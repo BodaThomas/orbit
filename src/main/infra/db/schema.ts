@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm'
 import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
-import type { AgentPermissions, ApprovalPayload, Appearance } from '@shared/types'
+import type { Recurrence } from '@shared/schedule'
+import type { AgentPermissions, ApprovalPayload, Appearance, ConstellationLimits, RateLimitWindow, StructuredResult, SubtaskSpec } from '@shared/types'
 
 const now = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`
 const createdAt = () => text('created_at').notNull().default(now)
@@ -19,6 +20,8 @@ export const agents = sqliteTable(
     autonomy: text('autonomy', { enum: ['manual', 'supervised', 'automated'] }).notNull().default('supervised'),
     permissions: text('permissions', { mode: 'json' }).$type<AgentPermissions>().notNull(),
     workingDirectory: text('working_directory'),
+    isolation: text('isolation').notNull().default('standard'),
+    effort: text('effort'),
     runtime: text('runtime').notNull().default('local'),
     machineId: text('machine_id'),
     dailyBudgetUsd: real('daily_budget_usd'),
@@ -131,6 +134,13 @@ export const missions = sqliteTable(
     costKind: text('cost_kind'),
     workflowId: text('workflow_id'),
     parentMissionId: text('parent_mission_id'),
+    constellationRunId: text('constellation_run_id'),
+    depth: integer('depth').notNull().default(0),
+    /** Delegated sub-mission contract (objective, expected result, context…). */
+    subtask: text('subtask', { mode: 'json' }).$type<SubtaskSpec>(),
+    /** Permissions for this mission when lower than the companion's (delegation ceiling). */
+    permissionsOverride: text('permissions_override', { mode: 'json' }).$type<AgentPermissions>(),
+    resultData: text('result_data', { mode: 'json' }).$type<StructuredResult>(),
     engine: text('engine'),
     sessionId: text('session_id'),
     workspace: text('workspace'),
@@ -218,9 +228,60 @@ export const fileChanges = sqliteTable(
     path: text('path').notNull(),
     kind: text('kind').notNull(),
     diff: text('diff'),
+    agentId: text('agent_id'),
+    /** engine: reported by the engine · git/scan: found by Orbit's before/after snapshot. */
+    source: text('source').notNull().default('engine'),
     createdAt: createdAt(),
   },
   (t) => [index('file_changes_mission_idx').on(t.missionId, t.createdAt)],
+)
+
+/** One row per execution: how the file list was obtained and whether it is complete. */
+export const fileInventories = sqliteTable(
+  'file_inventories',
+  {
+    id: text('id').primaryKey(),
+    missionId: text('mission_id')
+      .notNull()
+      .references(() => missions.id, { onDelete: 'cascade' }),
+    executionId: text('execution_id').notNull(),
+    agentId: text('agent_id').notNull(),
+    method: text('method').notNull(),
+    complete: integer('complete', { mode: 'boolean' }).notNull(),
+    note: text('note'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('file_inventories_mission_idx').on(t.missionId)],
+)
+
+/** Every decision taken by a security layer (policy, engine sandbox, isolation). */
+export const securityAuditEvents = sqliteTable(
+  'security_audit_events',
+  {
+    id: text('id').primaryKey(),
+    agentId: text('agent_id'),
+    missionId: text('mission_id'),
+    layer: text('layer').notNull(),
+    action: text('action').notNull(),
+    target: text('target'),
+    decision: text('decision').notNull(),
+    reason: text('reason'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('security_audit_created_idx').on(t.createdAt)],
+)
+
+/** Official subscription rate-limit snapshots emitted by an engine during a run. */
+export const subscriptionUsageRecords = sqliteTable(
+  'subscription_usage_records',
+  {
+    id: text('id').primaryKey(),
+    providerId: text('provider_id').notNull(),
+    windows: text('windows', { mode: 'json' }).$type<RateLimitWindow[]>().notNull(),
+    source: text('source').notNull(),
+    observedAt: text('observed_at').notNull(),
+  },
+  (t) => [index('subscription_usage_provider_idx').on(t.providerId, t.observedAt)],
 )
 
 export const approvalRequests = sqliteTable(
@@ -293,6 +354,7 @@ export const usageRecords = sqliteTable(
     costUsd: real('cost_usd'),
     costKind: text('cost_kind').notNull(),
     pricingVersion: text('pricing_version'),
+    equivalentUsd: real('equivalent_usd'),
     source: text('source').notNull(),
     createdAt: createdAt(),
   },
@@ -373,3 +435,240 @@ export const settings = sqliteTable('settings', {
   value: text('value', { mode: 'json' }).$type<unknown>().notNull(),
   updatedAt: updatedAt(),
 })
+
+// Constellations
+
+export const constellationDefinitions = sqliteTable('constellation_definitions', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  description: text('description').notNull().default(''),
+  objective: text('objective').notNull().default(''),
+  coordinatorAgentId: text('coordinator_agent_id').notNull(),
+  workspace: text('workspace'),
+  workspaceMode: text('workspace_mode').notNull().default('shared'),
+  permissions: text('permissions', { mode: 'json' }).$type<AgentPermissions>().notNull(),
+  limits: text('limits', { mode: 'json' }).$type<ConstellationLimits>().notNull(),
+  isTemplate: integer('is_template', { mode: 'boolean' }).notNull().default(false),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+})
+
+export const constellationMembers = sqliteTable(
+  'constellation_members',
+  {
+    constellationId: text('constellation_id')
+      .notNull()
+      .references(() => constellationDefinitions.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    role: text('role').notNull().default(''),
+    responsibilities: text('responsibilities').notNull().default(''),
+    canDelegate: integer('can_delegate', { mode: 'boolean' }).notNull().default(false),
+    sortOrder: integer('sort_order').notNull().default(0),
+  },
+  (t) => [uniqueIndex('constellation_members_pk').on(t.constellationId, t.agentId)],
+)
+
+export const constellationRuns = sqliteTable(
+  'constellation_runs',
+  {
+    id: text('id').primaryKey(),
+    constellationId: text('constellation_id')
+      .notNull()
+      .references(() => constellationDefinitions.id, { onDelete: 'cascade' }),
+    goal: text('goal').notNull(),
+    status: text('status').notNull(),
+    coordinatorAgentId: text('coordinator_agent_id').notNull(),
+    coordinatorMissionId: text('coordinator_mission_id'),
+    round: integer('round').notNull().default(0),
+    workspace: text('workspace'),
+    limits: text('limits', { mode: 'json' }).$type<ConstellationLimits>().notNull(),
+    synthesis: text('synthesis'),
+    error: text('error'),
+    origin: text('origin').notNull().default('user'),
+    /** Stable idempotency key (automation occurrence, double click…). */
+    idempotencyKey: text('idempotency_key'),
+    createdAt: createdAt(),
+    startedAt: text('started_at'),
+    finishedAt: text('finished_at'),
+  },
+  (t) => [index('constellation_runs_def_idx').on(t.constellationId, t.createdAt), uniqueIndex('constellation_runs_idem_unique').on(t.idempotencyKey)],
+)
+
+export const missionDependencies = sqliteTable(
+  'mission_dependencies',
+  {
+    missionId: text('mission_id')
+      .notNull()
+      .references(() => missions.id, { onDelete: 'cascade' }),
+    dependsOnMissionId: text('depends_on_mission_id')
+      .notNull()
+      .references(() => missions.id, { onDelete: 'cascade' }),
+  },
+  (t) => [uniqueIndex('mission_dependencies_pk').on(t.missionId, t.dependsOnMissionId)],
+)
+
+export const executionHandoffs = sqliteTable(
+  'execution_handoffs',
+  {
+    id: text('id').primaryKey(),
+    runId: text('run_id')
+      .notNull()
+      .references(() => constellationRuns.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    fromAgentId: text('from_agent_id').notNull(),
+    toAgentId: text('to_agent_id').notNull(),
+    missionId: text('mission_id'),
+    summary: text('summary').notNull(),
+    payload: text('payload').notNull(),
+    redactions: integer('redactions').notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [index('handoffs_run_idx').on(t.runId, t.createdAt)],
+)
+
+export const agentWorkspaces = sqliteTable(
+  'agent_workspaces',
+  {
+    id: text('id').primaryKey(),
+    runId: text('run_id')
+      .notNull()
+      .references(() => constellationRuns.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id').notNull(),
+    path: text('path').notNull(),
+    kind: text('kind').notNull(),
+    branch: text('branch'),
+    baseRef: text('base_ref'),
+    status: text('status').notNull().default('active'),
+    diffStat: text('diff_stat'),
+    conflictWith: text('conflict_with', { mode: 'json' }).$type<string[]>(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('agent_workspaces_run_idx').on(t.runId)],
+)
+
+
+
+// Automations
+
+export const automationDefinitions = sqliteTable(
+  'automation_definitions',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    targetKind: text('target_kind').notNull(), // agent | constellation
+    targetId: text('target_id').notNull(),
+    title: text('title').notNull(),
+    prompt: text('prompt').notNull(),
+    /** Recurrence (shared/schedule.ts); null for purely event-triggered automations. */
+    recurrence: text('recurrence', { mode: 'json' }).$type<Recurrence>(),
+    timezone: text('timezone').notNull(),
+    status: text('status').notNull().default('active'), // active | paused | completed
+    missedPolicy: text('missed_policy').notNull().default('ask'), // skip | run_once | ask
+    maxRunsPerDay: integer('max_runs_per_day'),
+    nextRunAt: text('next_run_at'),
+    lastRunAt: text('last_run_at'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index('automations_next_idx').on(t.status, t.nextRunAt)],
+)
+
+export const automationTriggers = sqliteTable(
+  'automation_triggers',
+  {
+    id: text('id').primaryKey(),
+    automationId: text('automation_id')
+      .notNull()
+      .references(() => automationDefinitions.id, { onDelete: 'cascade' }),
+    /** mission.completed | mission.failed | mission.status | automation.completed */
+    kind: text('kind').notNull(),
+    sourceAgentId: text('source_agent_id'),
+    sourceAutomationId: text('source_automation_id'),
+    statusFilter: text('status_filter'),
+    cooldownSec: integer('cooldown_sec').notNull().default(300),
+    createdAt: createdAt(),
+  },
+  (t) => [index('automation_triggers_auto_idx').on(t.automationId)],
+)
+
+export const automationRuns = sqliteTable(
+  'automation_runs',
+  {
+    id: text('id').primaryKey(),
+    automationId: text('automation_id')
+      .notNull()
+      .references(() => automationDefinitions.id, { onDelete: 'cascade' }),
+    scheduledFor: text('scheduled_for').notNull(),
+    trigger: text('trigger').notNull(), // schedule | missed | manual | event
+    status: text('status').notNull(), // pending_confirmation | running | done | failed | skipped | cancelled | uncertain
+    missionId: text('mission_id'),
+    constellationRunId: text('constellation_run_id'),
+    note: text('note'),
+    /** One run per occurrence: automation id + scheduled instant (or event id). */
+    idempotencyKey: text('idempotency_key').notNull(),
+    startedAt: text('started_at'),
+    finishedAt: text('finished_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('automation_runs_idem_unique').on(t.idempotencyKey), index('automation_runs_auto_idx').on(t.automationId, t.createdAt)],
+)
+
+// Remote runtime
+
+export const runtimeMachines = sqliteTable('runtime_machines', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  /** ssh: a real server through SSH · local: a runtime on this Mac (tests, VM shared folder). */
+  transport: text('transport').notNull(),
+  host: text('host'),
+  user: text('user'),
+  port: integer('port').notNull().default(22),
+  runtimeHome: text('runtime_home').notNull(),
+  /** Host key line pinned by the user (ssh-keyscan output), never trusted implicitly. */
+  hostKey: text('host_key'),
+  hostKeyFingerprint: text('host_key_fingerprint'),
+  status: text('status').notNull().default('new'), // new | pending_host_key | ready | online | offline | error | revoked
+  lastError: text('last_error'),
+  lastHeartbeatAt: text('last_heartbeat_at'),
+  runtimeVersion: text('runtime_version'),
+  protocol: integer('protocol'),
+  info: text('info', { mode: 'json' }).$type<Record<string, string>>(),
+  engines: text('engines', { mode: 'json' }).$type<{ id: string; available: boolean; detail: string }[]>(),
+  cursor: integer('cursor').notNull().default(0),
+  createdAt: createdAt(),
+})
+
+export const remoteMissions = sqliteTable(
+  'remote_missions',
+  {
+    /** = the runtime mission id = Orbit execution id (idempotency key). */
+    id: text('id').primaryKey(),
+    machineId: text('machine_id')
+      .notNull()
+      .references(() => runtimeMachines.id, { onDelete: 'cascade' }),
+    missionId: text('mission_id'),
+    status: text('status').notNull(),
+    result: text('result'),
+    error: text('error'),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index('remote_missions_machine_idx').on(t.machineId)],
+)
+
+export const runtimeEvents = sqliteTable(
+  'runtime_events',
+  {
+    machineId: text('machine_id')
+      .notNull()
+      .references(() => runtimeMachines.id, { onDelete: 'cascade' }),
+    seq: integer('seq').notNull(),
+    kind: text('kind').notNull(),
+    missionId: text('mission_id'),
+    data: text('data', { mode: 'json' }).$type<Record<string, unknown>>(),
+    at: text('at').notNull(),
+  },
+  (t) => [uniqueIndex('runtime_events_pk').on(t.machineId, t.seq)],
+)
