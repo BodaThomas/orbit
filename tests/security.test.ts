@@ -39,8 +39,9 @@ describe('niveau 1 — politique d’Orbit', () => {
   it('lecture autorisée dans le dossier', () => {
     expect(evaluateTool(pol(ws), { kind: 'read', name: 'Read', paths: [join(ws, 'app.ts')] }).decision).toBe('allow')
   })
-  it('écriture : demande d’accord (supervisé), refus sans permission', () => {
-    expect(evaluateTool(pol(ws), { kind: 'edit', name: 'Write', paths: [join(ws, 'app.ts')] }).decision).toBe('ask')
+  it('écriture : accord en manuel, automatique en supervisé, refus sans permission', () => {
+    expect(evaluateTool(pol(ws, ALL, 'manual'), { kind: 'edit', name: 'Write', paths: [join(ws, 'app.ts')] }).decision).toBe('ask')
+    expect(evaluateTool(pol(ws), { kind: 'edit', name: 'Write', paths: [join(ws, 'app.ts')] }).decision).toBe('allow')
     expect(evaluateTool(pol(ws, { ...ALL, writeFiles: false }), { kind: 'edit', name: 'Write', paths: [join(ws, 'app.ts')] }).decision).toBe('deny')
   })
   it('accès hors du dossier refusé, y compris par ../', () => {

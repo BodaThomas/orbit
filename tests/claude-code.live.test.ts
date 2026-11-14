@@ -19,7 +19,7 @@ describe.runIf(process.env.ORBIT_LIVE_CLAUDE_CODE === '1')('Claude Code CLI (ré
     prompt: '',
     instructions: 'Réponds en français, brièvement.',
     model: 'haiku',
-    policy: { workspace: ws, permissions: { readFiles: true, writeFiles: true, runCommands: false, network: false, manageProjects: false, externalActions: false }, autonomy: 'supervised', isolation: 'standard' },
+    policy: { workspace: ws, permissions: { readFiles: true, writeFiles: true, runCommands: false, network: false, manageProjects: false, externalActions: false }, autonomy: 'manual', isolation: 'standard' },
     secret: null,
     budgetUsd: null,
     signal: new AbortController().signal,

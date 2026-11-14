@@ -10,7 +10,7 @@ const ws = () => realpathSync(mkdtempSync(join(tmpdir(), 'orbit-cc-')))
 const PERMS = { readFiles: true, writeFiles: true, runCommands: false, network: false, manageProjects: false, externalActions: false }
 
 function request(over: Partial<EngineRunRequest> = {}, signal = new AbortController().signal): EngineRunRequest {
-  return { runId: 'r1', sessionId: null, prompt: 'Écris b.txt', instructions: 'Règles Orbit', model: null, policy: { workspace: ws(), permissions: PERMS, autonomy: 'supervised', isolation: 'standard' }, secret: null, budgetUsd: null, signal, ...over }
+  return { runId: 'r1', sessionId: null, prompt: 'Écris b.txt', instructions: 'Règles Orbit', model: null, policy: { workspace: ws(), permissions: PERMS, autonomy: 'manual', isolation: 'standard' }, secret: null, budgetUsd: null, signal, ...over }
 }
 
 /**

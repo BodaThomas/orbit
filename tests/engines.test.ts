@@ -41,7 +41,8 @@ const request = (ws: string, over: Partial<EngineRunRequest> = {}): EngineRunReq
   prompt: 'Analyse le projet',
   instructions: 'Tu es Atlas.',
   model: null,
-  policy: policy(ws),
+  // Approval flows are exercised in manual mode, where every write asks.
+  policy: policy(ws, ALL, 'manual'),
   secret: 'sk-ant-test',
   budgetUsd: null,
   signal: new AbortController().signal,
@@ -74,11 +75,14 @@ describe('tool policy (enforced by the runtime, not the prompt)', () => {
     }
   })
 
-  it('asks before writes and commands when supervised, allows them when automated', () => {
+  it('asks before writes and commands when manual, allows them when automated', () => {
     const ws = workspace()
     const edit = { kind: 'edit' as const, name: 'Edit', paths: [join(ws, 'src/a.ts')] }
     const cmd = { kind: 'command' as const, name: 'Bash', paths: [], command: 'npm test' }
-    expect(evaluateTool(policy(ws, ALL, 'supervised'), edit).decision).toBe('ask')
+    // Manual: every write and command waits for a human. Supervised: routine work runs
+    // (see tests/permissions.test.ts), only sensitive actions ask.
+    expect(evaluateTool(policy(ws, ALL, 'manual'), edit).decision).toBe('ask')
+    expect(evaluateTool(policy(ws, ALL, 'supervised'), edit).decision).toBe('allow')
     expect(evaluateTool(policy(ws, ALL, 'manual'), cmd).decision).toBe('ask')
     expect(evaluateTool(policy(ws, ALL, 'automated'), edit).decision).toBe('allow')
     expect(evaluateTool(policy(ws, ALL, 'automated'), cmd).decision).toBe('allow')
