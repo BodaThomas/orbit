@@ -37,7 +37,7 @@ export const demoAdapter: ProviderAdapter = {
   id: 'demo',
   name: 'Démo locale',
   availability: 'available',
-  capabilities: { streaming: true, cancel: true, tools: false, sessions: false, usage: 'estimated', apiKeyAuth: false },
+  capabilities: { kind: 'chat', streaming: true, cancel: true, tools: false, sessions: false, usage: 'estimated', apiKeyAuth: false },
   requiresSecret: false,
   defaultModels: [{ id: 'demo-orbit', label: 'Modèle de démonstration', hint: 'Hors ligne' }],
   statusPage: null,

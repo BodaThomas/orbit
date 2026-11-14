@@ -56,9 +56,10 @@ export const handlers: Handlers = {
   'conversations.search': (i, h) => h.runtime().conversations.search(i.query),
 
   'missions.list': (i, h) => h.runtime().missions.list(i.agentId),
-  'missions.get': (i, h) => ({ mission: h.runtime().missions.get(i.id), events: h.runtime().missions.events(i.id) }),
+  'missions.get': (i, h) => h.runtime().missions.detail(i.id),
   'missions.create': (i, h) => h.runtime().missions.create(i),
   'missions.start': (i, h) => h.runtime().missions.start(i.id, 'user'),
+  'missions.followUp': (i, h) => h.runtime().missions.followUp(i.id, i.prompt),
   'missions.cancel': (i, h) => h.runtime().missions.cancel(i.id),
   'missions.retry': (i, h) => h.runtime().missions.retry(i.id),
   'missions.duplicate': (i, h) => h.runtime().missions.duplicate(i.id),

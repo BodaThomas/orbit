@@ -24,7 +24,7 @@ export const openaiAdapter: ProviderAdapter = {
   id: 'openai',
   name: 'OpenAI',
   availability: 'available',
-  capabilities: { streaming: true, cancel: true, tools: false, sessions: false, usage: 'official', apiKeyAuth: true },
+  capabilities: { kind: 'chat', streaming: true, cancel: true, tools: false, sessions: false, usage: 'official', apiKeyAuth: true },
   requiresSecret: true,
   defaultModels: [],
   statusPage: {

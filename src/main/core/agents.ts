@@ -124,7 +124,7 @@ export class AgentManager {
   /** On boot nothing can still be running: reset transient states. */
   resetTransientStatuses(): void {
     for (const a of this.list()) {
-      if (a.status === 'working') this.setStatus(a.id, 'available', null)
+      if (a.status === 'working' || a.status === 'awaiting_approval') this.setStatus(a.id, 'available', null)
     }
   }
 }

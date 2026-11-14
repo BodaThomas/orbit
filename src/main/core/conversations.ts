@@ -183,7 +183,7 @@ export class ConversationManager {
     const adapter = this.providers.adapter(job.providerId)
     let text = ''
     let lastFlush = Date.now()
-    let usage: { inputTokens: number; outputTokens: number } | null = null
+    let usage: Extract<import('../infra/providers').StreamChunk, { type: 'usage' }> | null = null
     const flush = (status: Message['status'], extra: Partial<typeof messages.$inferInsert> = {}) => {
       this.db.update(messages).set({ content: text, status, ...extra }).where(eq(messages.id, job.messageId)).run()
     }
@@ -202,15 +202,14 @@ export class ConversationManager {
           }
         } else if (chunk.type === 'usage') usage = chunk
       }
-      const cost = usage
-        ? this.usage.record({ agentId: job.agentId, providerId: job.providerId, model: job.model, ...usage, source: 'conversation' })
-        : null
+      const cost = usage ? this.usage.recordChunk(job.agentId, job.providerId, job.model, usage, 'conversation') : null
       const status = job.controller.signal.aborted ? 'cancelled' : 'complete'
       flush(status, {
         inputTokens: usage?.inputTokens ?? null,
         outputTokens: usage?.outputTokens ?? null,
         costUsd: cost?.costUsd ?? null,
         costKind: cost?.costKind ?? null,
+        model: cost?.model ?? job.model,
       })
       if (status === 'complete') {
         this.journal.activity({ type: 'message.received', agentId: job.agentId, conversationId: job.conversationId, title: `${job.agentName} a répondu`, detail: text.slice(0, 140) })

@@ -8,11 +8,14 @@ import type {
   Bootstrap,
   Conversation,
   ExecutionEvent,
+  LiveActivity,
   Machine,
   Message,
   Mission,
+  MissionDetail,
   OrbitNotification,
   OrbitSettings,
+  ToolCall,
   ProviderHealth,
   ProviderInfo,
   UsageSummary,
@@ -116,6 +119,7 @@ export const ipcSchemas = {
     startNow: z.boolean(),
   }),
   'missions.start': z.object({ id }),
+  'missions.followUp': z.object({ id, prompt: z.string().trim().min(1).max(20_000) }),
   'missions.cancel': z.object({ id }),
   'missions.retry': z.object({ id }),
   'missions.duplicate': z.object({ id }),
@@ -180,9 +184,10 @@ export interface IpcOutputs {
   'conversations.search': { conversation: Conversation; snippet: string }[]
 
   'missions.list': Mission[]
-  'missions.get': { mission: Mission; events: ExecutionEvent[] }
+  'missions.get': MissionDetail
   'missions.create': Mission
   'missions.start': Mission
+  'missions.followUp': Mission
   'missions.cancel': Mission
   'missions.retry': Mission
   'missions.duplicate': Mission
@@ -221,6 +226,9 @@ export type OrbitEvent =
   | { type: 'message.updated'; message: Message }
   | { type: 'activity'; event: ActivityEvent }
   | { type: 'mission.event'; event: ExecutionEvent }
+  | { type: 'mission.delta'; missionId: string; executionId: string; delta: string }
+  | { type: 'mission.activity'; missionId: string; activity: LiveActivity | null }
+  | { type: 'mission.tool'; toolCall: ToolCall }
   | { type: 'invalidate'; scopes: InvalidateScope[] }
   | { type: 'navigate'; route: string }
 

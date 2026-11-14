@@ -3,6 +3,7 @@ import type { ModelInfo, ProviderId, ProviderInfo } from '@shared/types'
 import type { OrbitDb } from '../infra/db/client'
 import { providerConnections } from '../infra/db/schema'
 import { ADAPTERS, ProviderError, type ProviderAdapter } from '../infra/providers'
+import type { AgentEngine, EngineId, EngineReadiness } from './engine/types'
 import type { EventBus } from './event-bus'
 import type { Journal } from './journal'
 import type { SecretCipher } from './platform'
@@ -20,14 +21,21 @@ export class ProviderRegistry {
     private settings: SettingsStore,
     private mode: 'real' | 'demo',
     private adapters: Record<ProviderId, ProviderAdapter> = ADAPTERS,
+    private engines: Partial<Record<EngineId, AgentEngine>> = {},
   ) {}
 
   adapter(id: ProviderId): ProviderAdapter {
     return this.adapters[id]
   }
 
+  engine(id: ProviderId): AgentEngine | null {
+    return id === 'claude-agent' || id === 'codex' ? (this.engines[id] ?? null) : null
+  }
+
   /** Decrypts the secret for a provider. Main-process only, never crosses IPC. */
   secretFor(id: ProviderId): string | null {
+    const from = this.adapters[id].secretFrom
+    if (from) return this.secretFor(from)
     const row = this.db.select().from(providerConnections).where(eq(providerConnections.providerId, id)).get()
     if (!row?.encryptedSecret) return null
     try {
@@ -43,20 +51,29 @@ export class ProviderRegistry {
       const a = this.adapters[id]
       const row = rows.get(id)
       const cached = this.settings.getRaw<ModelInfo[]>(`models:${id}`)
-      const hasSecret = Boolean(row?.encryptedSecret)
+      const source = a.secretFrom ? rows.get(a.secretFrom) : row
+      const hasSecret = Boolean(source?.encryptedSecret)
+      const readiness = a.capabilities.kind === 'agent' ? this.settings.getRaw<EngineReadiness>(`engine:${id}`) : null
+      const connected =
+        a.capabilities.kind === 'agent'
+          ? a.requiresSecret
+            ? hasSecret && !source?.lastError
+            : Boolean(readiness?.ready)
+          : a.availability === 'available' && (!a.requiresSecret || (hasSecret && !row?.lastError))
       return {
         id,
         name: a.name,
         availability: a.availability,
         capabilities: a.capabilities,
         models: cached?.length ? cached : a.defaultModels,
-        connected: a.availability === 'available' && (!a.requiresSecret || (hasSecret && !row?.lastError)),
+        connected,
         hasSecret,
-        secretHint: row?.secretHint ?? null,
-        lastValidatedAt: row?.lastValidatedAt ?? null,
+        secretHint: source?.secretHint ?? null,
+        lastValidatedAt: a.capabilities.kind === 'agent' ? (this.settings.getRaw<string>(`engine:${id}:at`) ?? null) : (row?.lastValidatedAt ?? null),
         statusPage: a.statusPage?.page ?? null,
         services: a.statusPage?.services ?? [],
         notes: a.notes,
+        statusDetail: readiness?.detail ?? (a.capabilities.kind === 'agent' && a.secretFrom && !hasSecret ? `Connectez d’abord ${this.adapters[a.secretFrom].name} : le moteur utilise sa clé.` : null),
       }
     })
   }
@@ -69,7 +86,7 @@ export class ProviderRegistry {
 
   async setKey(id: ProviderId, apiKey: string): Promise<ProviderInfo> {
     const adapter = this.adapter(id)
-    if (adapter.availability !== 'available' || !adapter.requiresSecret) {
+    if (adapter.availability !== 'available' || !adapter.requiresSecret || adapter.secretFrom) {
       throw new OrbitError('validation', `${adapter.name} n’accepte pas de clé pour le moment.`)
     }
     if (!this.secrets.available()) {
@@ -116,6 +133,23 @@ export class ProviderRegistry {
 
   async validate(id: ProviderId): Promise<{ ok: boolean; error: string | null }> {
     const adapter = this.adapter(id)
+    const engine = this.engine(id)
+    if (engine) {
+      let readiness: EngineReadiness
+      try {
+        readiness = await engine.checkReady(adapter.requiresSecret ? this.secretFor(id) : null)
+      } catch (err) {
+        readiness = { ready: false, detail: err instanceof Error ? err.message : String(err), auth: 'unknown' }
+      }
+      this.settings.setRaw(`engine:${id}`, readiness)
+      this.settings.setRaw(`engine:${id}:at`, nowIso())
+      if (readiness.ready && engine.listModels) {
+        const models = await engine.listModels().catch(() => [])
+        if (models.length) this.settings.setRaw(`models:${id}`, [{ id: 'default', label: 'Modèle par défaut', hint: 'Défini par le moteur' }, ...models])
+      }
+      this.bus.invalidate('providers')
+      return { ok: readiness.ready, error: readiness.ready ? null : readiness.detail }
+    }
     try {
       await adapter.validate(adapter.requiresSecret ? this.secretFor(id) : null)
       this.db.update(providerConnections).set({ lastValidatedAt: nowIso(), lastError: null }).where(eq(providerConnections.providerId, id)).run()

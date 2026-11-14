@@ -11,4 +11,5 @@ export interface PlatformServices {
   secrets: SecretCipher
   nativeNotify(title: string, body: string, route: string | null): void
   fetch: typeof fetch
+  appVersion: string
 }

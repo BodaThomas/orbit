@@ -1,9 +1,12 @@
+import { existsSync, statSync } from 'node:fs'
 import { and, asc, count, desc, eq, inArray } from 'drizzle-orm'
 import { canTransition, MISSION_STATUS_LABELS } from '@shared/mission-states'
-import type { ApprovalRequest, ExecutionEvent, Mission, MissionPriority, MissionStatus } from '@shared/types'
+import type { Agent, ApprovalRequest, ExecutionEvent, Mission, MissionDetail, MissionPriority, MissionStatus } from '@shared/types'
 import type { OrbitDb } from '../infra/db/client'
-import { toApproval, toExecutionEvent, toMission } from '../infra/db/mappers'
-import { approvalRequests, executionEvents, missionExecutions, missions } from '../infra/db/schema'
+import { toApproval, toExecution, toExecutionEvent, toFileChange, toMission, toToolCall } from '../infra/db/mappers'
+import { approvalRequests, executionEvents, fileChanges, missionExecutions, missions, toolCalls } from '../infra/db/schema'
+import type { StreamChunk } from '../infra/providers'
+import type { AgentRunner } from './agent-runner'
 import type { AgentManager } from './agents'
 import type { EventBus } from './event-bus'
 import type { Journal } from './journal'
@@ -14,6 +17,18 @@ import type { UsageTracker } from './usage'
 import { newId, nowIso, OrbitError, shortId } from './util'
 
 const OUTPUT_FLUSH_MS = 1200
+
+/** Orbit's rules appended to every engine session. Enforcement itself lives in the tool policy. */
+function engineRules(agent: Agent, workspace: string): string {
+  const p = agent.permissions
+  const can = [p.readFiles && 'lire', p.writeFiles && 'modifier des fichiers', p.runCommands && 'exécuter des commandes', p.network && 'accéder au web'].filter(Boolean).join(', ')
+  return [
+    `Tu travailles pour l’utilisateur dans Orbit, une application qui supervise ses compagnons IA.`,
+    `Dossier de travail autorisé : ${workspace}. Tout accès en dehors est bloqué.`,
+    `Tu peux : ${can || 'seulement lire ce qu’on te donne'}. Certaines actions demandent l’accord de l’utilisateur ; s’il refuse, ne retente pas la même action.`,
+    `Réponds en français. Termine par un récapitulatif Markdown : ce que tu as fait, les fichiers modifiés (s’il y en a), puis « Prochaines étapes ».`,
+  ].join('\n')
+}
 
 export class MissionManager {
   private running = new Map<string, AbortController>()
@@ -27,6 +42,7 @@ export class MissionManager {
     private usage: UsageTracker,
     private permissions: PermissionManager,
     private memory: MemoryStore,
+    private runner: AgentRunner,
   ) {}
 
   // Queries
@@ -52,6 +68,16 @@ export class MissionManager {
     return this.db.select().from(executionEvents).where(eq(executionEvents.missionId, missionId)).orderBy(asc(executionEvents.createdAt)).all().map(toExecutionEvent)
   }
 
+  detail(id: string): MissionDetail {
+    return {
+      mission: this.get(id),
+      events: this.events(id),
+      executions: this.db.select().from(missionExecutions).where(eq(missionExecutions.missionId, id)).orderBy(asc(missionExecutions.startedAt)).all().map(toExecution),
+      toolCalls: this.db.select().from(toolCalls).where(eq(toolCalls.missionId, id)).orderBy(asc(toolCalls.createdAt)).all().map(toToolCall),
+      fileChanges: this.db.select().from(fileChanges).where(eq(fileChanges.missionId, id)).orderBy(asc(fileChanges.createdAt)).all().map(toFileChange),
+    }
+  }
+
   approvals(status?: ApprovalRequest['status']): ApprovalRequest[] {
     return this.db
       .select()
@@ -63,10 +89,16 @@ export class MissionManager {
       .map(toApproval)
   }
 
+  isRunning(id: string): boolean {
+    return this.running.has(id)
+  }
+
   // Commands
 
   create(input: { title: string; description: string; agentId: string; priority: MissionPriority; startNow: boolean }): Mission {
     const agent = this.agents.get(input.agentId)
+    const engine = this.providers.engine(agent.providerId)
+    const workspace = engine ? this.requireWorkspace(agent) : null
     const ts = nowIso()
     const row = {
       id: newId(),
@@ -76,6 +108,8 @@ export class MissionManager {
       agentId: input.agentId,
       priority: input.priority,
       status: 'todo',
+      engine: engine ? agent.providerId : null,
+      workspace,
       createdAt: ts,
       updatedAt: ts,
     }
@@ -86,18 +120,25 @@ export class MissionManager {
     return this.get(row.id)
   }
 
-  start(id: string, origin: 'user' | 'automation'): Mission {
+  start(id: string, origin: 'user' | 'automation', followUp?: string): Mission {
     const mission = this.get(id)
     if (this.running.has(id)) throw new OrbitError('conflict', 'Cette mission est déjà en cours.')
     const agent = this.agents.get(mission.agentId)
+    const engine = mission.engine ? this.providers.engine(mission.engine) : null
+    if (mission.engine && !engine) throw new OrbitError('provider', 'Le moteur de cette mission n’est pas disponible.')
+    if (engine && mission.engine !== agent.providerId) {
+      throw new OrbitError('conflict', `Cette mission appartient à une session ${engine.name}. Dupliquez-la pour la confier au moteur actuel de ${agent.name}.`)
+    }
+    if (engine) this.checkWorkspace(mission.workspace, agent)
 
-    const decision = this.permissions.check(agent, 'mission.start', origin)
+    const decision = this.permissions.check(agent, 'mission.start', origin, { toolGated: Boolean(engine) })
     if (!decision.allowed) throw new OrbitError('forbidden', decision.reason ?? 'Démarrage refusé.')
 
     const adapter = this.providers.adapter(agent.providerId)
     if (adapter.availability !== 'available') throw new OrbitError('provider', `${adapter.name} n’est pas encore disponible.`)
     if (adapter.requiresSecret && !this.providers.secretFor(agent.providerId)) {
-      throw new OrbitError('provider', `Connectez ${adapter.name} pour que ${agent.name} puisse travailler.`)
+      const from = adapter.secretFrom ? this.providers.adapter(adapter.secretFrom).name : adapter.name
+      throw new OrbitError('provider', `Connectez ${from} pour que ${agent.name} puisse travailler.`)
     }
     const blocked = this.usage.budgetBlock(agent)
     if (blocked) {
@@ -126,15 +167,26 @@ export class MissionManager {
       return this.get(id)
     }
 
-    this.transition(mission, 'running', { startedAt: nowIso(), finishedAt: null, error: null, result: null })
-    void this.execute(id)
+    this.transition(mission, 'running', { startedAt: mission.startedAt && followUp ? mission.startedAt : nowIso(), finishedAt: null, error: null, ...(followUp ? {} : { result: null }) })
+    void this.execute(id, followUp).catch((err) => this.journal.activity({ type: 'mission.failed', level: 'error', missionId: id, title: 'Erreur interne d’exécution', detail: String(err) }))
     return this.get(id)
+  }
+
+  /** Continues an agent mission in the same engine session (resumes after a restart too). */
+  followUp(id: string, prompt: string): Mission {
+    const mission = this.get(id)
+    if (!mission.engine) throw new OrbitError('validation', 'Seules les missions confiées à un moteur agent (Claude Agent SDK, Codex) peuvent être poursuivies.')
+    if (this.running.has(id)) throw new OrbitError('conflict', 'Le compagnon travaille encore sur cette mission.')
+    if (mission.status === 'approval_required') throw new OrbitError('conflict', 'Répondez d’abord à la demande d’approbation en attente.')
+    if (mission.status !== 'todo') this.transition(mission, 'todo')
+    return this.start(id, 'user', prompt)
   }
 
   cancel(id: string): Mission {
     const mission = this.get(id)
     const controller = this.running.get(id)
     if (controller) {
+      this.runner.denyAllFor(id)
       controller.abort()
       return this.get(id)
     }
@@ -160,6 +212,7 @@ export class MissionManager {
   }
 
   delete(id: string): void {
+    this.runner.denyAllFor(id)
     this.running.get(id)?.abort()
     this.db.delete(missions).where(eq(missions.id, id)).run()
     this.bus.invalidate('missions', 'approvals')
@@ -169,10 +222,18 @@ export class MissionManager {
     const row = this.db.select().from(approvalRequests).where(eq(approvalRequests.id, id)).get()
     if (!row) throw new OrbitError('not_found', 'Demande introuvable.')
     if (row.status !== 'pending') throw new OrbitError('conflict', 'Cette demande a déjà été traitée.')
+    if (row.kind === 'tool_use' && !this.runner.hasPendingApproval(id)) {
+      this.db.update(approvalRequests).set({ status: 'expired', resolvedAt: nowIso() }).where(eq(approvalRequests.id, id)).run()
+      this.bus.invalidate('approvals')
+      throw new OrbitError('conflict', 'Cette demande a expiré : l’exécution qui l’attendait est terminée.')
+    }
     this.db.update(approvalRequests).set({ status: approve ? 'approved' : 'denied', resolvedAt: nowIso() }).where(eq(approvalRequests.id, id)).run()
     this.journal.audit({ actor: 'user', agentId: row.agentId, action: `approval.${approve ? 'approve' : 'deny'}`, target: row.missionId, allowed: approve, reason: row.summary })
     this.journal.activity({ type: 'approval.resolved', level: approve ? 'success' : 'info', agentId: row.agentId, missionId: row.missionId, title: approve ? 'Demande approuvée' : 'Demande refusée', detail: row.summary })
-    if (row.missionId && row.kind === 'mission_start') {
+    if (row.kind === 'tool_use') {
+      this.runner.resolveApproval(id, approve)
+      if (!approve) this.journal.activity({ type: 'tool.denied', agentId: row.agentId, missionId: row.missionId, title: 'Action refusée', detail: row.summary })
+    } else if (row.missionId && row.kind === 'mission_start') {
       const mission = this.get(row.missionId)
       if (approve && mission.status === 'approval_required') {
         this.transition(mission, 'running', { startedAt: nowIso(), finishedAt: null, error: null, result: null })
@@ -187,106 +248,209 @@ export class MissionManager {
   }
 
   cancelAll(): void {
+    for (const id of this.running.keys()) this.runner.denyAllFor(id)
     for (const c of this.running.values()) c.abort()
   }
 
-  /** After a crash or quit, nothing is running: mark interrupted work as failed. */
+  /**
+   * After a crash or quit nothing is running. Interrupted work is marked failed, its
+   * questions expire and its tools are closed. Engine sessions stay resumable: the user
+   * can continue the mission, which resumes the same session.
+   */
   recoverInterrupted(): void {
+    const ts = nowIso()
     const open = this.db.select().from(missionExecutions).where(eq(missionExecutions.status, 'running')).all()
     for (const ex of open) {
       this.db
         .update(missions)
-        .set({ status: 'failed', error: 'Interrompue : Orbit a été fermé pendant l’exécution.', finishedAt: nowIso(), updatedAt: nowIso() })
-        .where(and(eq(missions.id, ex.missionId), inArray(missions.status, ['running', 'waiting'])))
+        .set({ status: 'failed', error: 'Interrompue : Orbit a été fermé pendant l’exécution. Vous pouvez poursuivre la mission, la session est conservée.', finishedAt: ts, updatedAt: ts })
+        .where(and(eq(missions.id, ex.missionId), inArray(missions.status, ['running', 'waiting', 'approval_required'])))
         .run()
-      this.db.update(missionExecutions).set({ status: 'failed', finishedAt: nowIso() }).where(eq(missionExecutions.id, ex.id)).run()
+      this.db.update(missionExecutions).set({ status: 'failed', error: 'Interrompue', finishedAt: ts }).where(eq(missionExecutions.id, ex.id)).run()
     }
+    this.db.update(approvalRequests).set({ status: 'expired', resolvedAt: ts }).where(and(eq(approvalRequests.kind, 'tool_use'), eq(approvalRequests.status, 'pending'))).run()
+    this.db.update(toolCalls).set({ status: 'cancelled', finishedAt: ts }).where(inArray(toolCalls.status, ['running', 'awaiting_approval'])).run()
   }
 
   // Execution engine
 
-  private async execute(missionId: string): Promise<void> {
+  private async execute(missionId: string, followUp?: string): Promise<void> {
     const mission = this.get(missionId)
     const agent = this.agents.get(mission.agentId)
     const adapter = this.providers.adapter(agent.providerId)
     const attempts = this.db.select({ n: count() }).from(missionExecutions).where(eq(missionExecutions.missionId, missionId)).get()?.n ?? 0
     const executionId = newId()
+    const prompt = followUp ?? `# Mission ${mission.shortId} — ${mission.title}\n\nPriorité : ${mission.priority}\n\n${mission.description || '(pas de description)'}`
     try {
-      this.db.insert(missionExecutions).values({ id: executionId, missionId, idempotencyKey: `${missionId}:${attempts + 1}`, status: 'running', startedAt: nowIso() }).run()
+      this.db.insert(missionExecutions).values({ id: executionId, missionId, idempotencyKey: `${missionId}:${attempts + 1}`, status: 'running', prompt, startedAt: nowIso() }).run()
     } catch {
       throw new OrbitError('conflict', 'Cette exécution a déjà été lancée.')
     }
     const controller = new AbortController()
     this.running.set(missionId, controller)
     this.agents.setStatus(agent.id, 'working', mission.title)
-    this.event(missionId, executionId, 'started', `${agent.name} commence la mission avec ${adapter.name} · ${agent.model}`)
-    this.journal.activity({ type: 'mission.started', agentId: agent.id, missionId, title: `${agent.name} a démarré une mission`, detail: mission.title })
+    const engine = mission.engine ? this.providers.engine(mission.engine) : null
+    if (followUp) this.event(missionId, executionId, 'user', followUp)
+    this.event(missionId, executionId, 'started', `${agent.name} ${followUp ? 'reprend' : 'commence'} la mission avec ${adapter.name} · ${agent.model}${mission.workspace ? ` · ${mission.workspace}` : ''}`)
+    if (!followUp) this.journal.activity({ type: 'mission.started', agentId: agent.id, missionId, title: `${agent.name} a démarré une mission`, detail: mission.title })
 
+    let text = ''
+    let usage: { inputTokens: number; outputTokens: number; costUsd: number | null; costKind: Mission['costKind'] } | null = null
+    let failure: string | null = null
+    let cancelled = false
+    try {
+      if (engine) {
+        const outcome = await this.runner.run({
+          mission,
+          agent,
+          engine,
+          executionId,
+          prompt,
+          instructions: `${agent.instructions}${this.memory.contextFor(agent.id)}\n\n${engineRules(agent, mission.workspace!)}`,
+          secret: adapter.requiresSecret ? this.providers.secretFor(agent.providerId) : null,
+          budgetUsd: engine.capabilities.budgetCap ? this.usage.remainingBudget(agent) : null,
+          signal: controller.signal,
+          onWaiting: (waiting) => {
+            const fresh = this.get(missionId)
+            if (waiting && fresh.status === 'running') this.transition(fresh, 'approval_required')
+            else if (!waiting && fresh.status === 'approval_required') this.transition(fresh, 'running')
+          },
+        })
+        text = outcome.finalText
+        usage = outcome.usage.costKind || outcome.usage.inputTokens ? outcome.usage : null
+        cancelled = outcome.status === 'cancelled' || controller.signal.aborted
+        if (outcome.status === 'failed') failure = outcome.error?.message ?? 'Le moteur a échoué.'
+      } else {
+        const r = await this.streamChat(missionId, executionId, agent, prompt, controller.signal)
+        text = r.text
+        usage = r.usage
+        cancelled = controller.signal.aborted
+      }
+    } catch (err) {
+      failure = err instanceof Error ? err.message : String(err)
+    } finally {
+      this.running.delete(missionId)
+    }
+
+    try {
+      this.finish({ missionId, executionId, agent, mission, text, usage, failure, cancelled, followUp: Boolean(followUp) })
+    } catch (err) {
+      // The mission may have been deleted while running.
+      if (!(err instanceof OrbitError && err.code === 'not_found')) throw err
+      this.agents.setStatus(agent.id, 'available', null)
+    } finally {
+      this.bus.invalidate('missions', 'agents')
+    }
+  }
+
+  private finish(o: {
+    missionId: string
+    executionId: string
+    agent: Agent
+    mission: Mission
+    text: string
+    usage: { inputTokens: number; outputTokens: number; costUsd: number | null; costKind: Mission['costKind'] } | null
+    failure: string | null
+    cancelled: boolean
+    followUp: boolean
+  }) {
+    const { missionId, executionId, agent, mission, usage } = o
+    const fresh = this.get(missionId)
+    const prevCost = o.followUp ? fresh.costUsd : null
+    const costUsd = usage?.costUsd != null ? (prevCost ?? 0) + usage.costUsd : prevCost
+    const costPatch = usage ? { costUsd, costKind: usage.costKind } : {}
+    const result = o.text || (o.followUp ? fresh.result : null)
+    this.db
+      .update(missionExecutions)
+      .set({
+        status: o.failure ? 'failed' : o.cancelled ? 'cancelled' : 'done',
+        error: o.failure,
+        inputTokens: usage?.inputTokens ?? null,
+        outputTokens: usage?.outputTokens ?? null,
+        costUsd: usage?.costUsd ?? null,
+        costKind: usage?.costKind ?? null,
+        finishedAt: nowIso(),
+      })
+      .where(eq(missionExecutions.id, executionId))
+      .run()
+
+    if (o.cancelled) {
+      if (canTransition(fresh.status, 'cancelled')) this.transition(fresh, 'cancelled', { finishedAt: nowIso(), result, ...costPatch })
+      this.event(missionId, executionId, 'cancelled', 'Mission arrêtée par l’utilisateur.')
+      this.agents.setStatus(agent.id, 'available', null)
+      this.journal.activity({ type: 'mission.cancelled', agentId: agent.id, missionId, title: 'Mission arrêtée', detail: mission.title })
+    } else if (o.failure) {
+      if (canTransition(fresh.status, 'failed')) this.transition(fresh, 'failed', { finishedAt: nowIso(), error: o.failure, result, ...costPatch })
+      this.event(missionId, executionId, 'failed', o.failure)
+      this.agents.setStatus(agent.id, 'error', o.failure.slice(0, 120))
+      this.journal.activity({ type: 'mission.failed', level: 'error', agentId: agent.id, missionId, title: `Échec de la mission de ${agent.name}`, detail: o.failure })
+      this.journal.notify('mission_failed', `Mission échouée · ${agent.name}`, o.failure, `/missions/${missionId}`)
+    } else {
+      this.transition(fresh, 'done', { finishedAt: nowIso(), result, ...costPatch })
+      this.event(missionId, executionId, 'completed', 'Mission terminée.')
+      this.agents.setStatus(agent.id, 'done', mission.title)
+      setTimeout(() => {
+        try {
+          if (this.agents.get(agent.id).status === 'done') this.agents.setStatus(agent.id, 'available', null)
+        } catch {
+          /* agent deleted meanwhile */
+        }
+      }, 8000).unref?.()
+      this.journal.activity({ type: 'mission.completed', level: 'success', agentId: agent.id, missionId, title: `${agent.name} a terminé une mission`, detail: mission.title })
+      this.journal.notify('mission_done', `${agent.name} a terminé`, mission.title, `/missions/${missionId}`)
+    }
+  }
+
+  /** Chat providers: one streamed answer, no tools. */
+  private async streamChat(missionId: string, executionId: string, agent: Agent, prompt: string, signal: AbortSignal) {
+    const adapter = this.providers.adapter(agent.providerId)
     let text = ''
     let pending = ''
     let lastFlush = Date.now()
-    let usage: { inputTokens: number; outputTokens: number } | null = null
+    let chunkUsage: Extract<StreamChunk, { type: 'usage' }> | null = null
     const flushOutput = () => {
       if (!pending) return
       this.event(missionId, executionId, 'output', pending)
       pending = ''
       lastFlush = Date.now()
     }
-
     try {
       const secret = adapter.requiresSecret ? this.providers.secretFor(agent.providerId) : null
       const system =
         agent.instructions +
         this.memory.contextFor(agent.id) +
         `\n\nTu exécutes une mission confiée par l’utilisateur dans Orbit. Tu n’as accès à aucun outil : produis directement le livrable, structuré en Markdown, puis termine par une courte section « Prochaines étapes ».`
-      const prompt = `# Mission ${mission.shortId} — ${mission.title}\n\nPriorité : ${mission.priority}\n\n${mission.description || '(pas de description)'}`
-      for await (const chunk of adapter.stream({ model: agent.model, system, messages: [{ role: 'user', content: prompt }], maxTokens: 32_000 }, secret, controller.signal)) {
+      for await (const chunk of adapter.stream({ model: agent.model, system, messages: [{ role: 'user', content: prompt }], maxTokens: 32_000 }, secret, signal)) {
         if (chunk.type === 'text') {
           text += chunk.text
           pending += chunk.text
+          this.bus.emit({ type: 'mission.delta', missionId, executionId, delta: chunk.text })
           if (Date.now() - lastFlush > OUTPUT_FLUSH_MS) flushOutput()
-        } else if (chunk.type === 'usage') usage = chunk
+        } else if (chunk.type === 'usage') chunkUsage = chunk
       }
-      flushOutput()
-      const cost = usage ? this.usage.record({ agentId: agent.id, providerId: agent.providerId, model: agent.model, ...usage, source: 'mission' }) : null
-      if (usage) {
-        this.event(missionId, executionId, 'usage', `${usage.inputTokens.toLocaleString('fr-FR')} jetons en entrée · ${usage.outputTokens.toLocaleString('fr-FR')} en sortie`, { ...usage, ...cost })
-      }
-      const fresh = this.get(missionId)
-      if (controller.signal.aborted) {
-        this.transition(fresh, 'cancelled', { finishedAt: nowIso(), result: text || null, costUsd: cost?.costUsd ?? null, costKind: cost?.costKind ?? null })
-        this.event(missionId, executionId, 'cancelled', 'Mission arrêtée par l’utilisateur.')
-        this.finishExecution(executionId, 'cancelled')
-        this.agents.setStatus(agent.id, 'available', null)
-        this.journal.activity({ type: 'mission.cancelled', agentId: agent.id, missionId, title: 'Mission arrêtée', detail: mission.title })
-      } else {
-        this.transition(fresh, 'done', { finishedAt: nowIso(), result: text, costUsd: cost?.costUsd ?? null, costKind: cost?.costKind ?? null })
-        this.event(missionId, executionId, 'completed', 'Mission terminée.')
-        this.finishExecution(executionId, 'done')
-        this.agents.setStatus(agent.id, 'done', mission.title)
-        setTimeout(() => {
-          try {
-            if (this.agents.get(agent.id).status === 'done') this.agents.setStatus(agent.id, 'available', null)
-          } catch {
-            /* agent deleted meanwhile */
-          }
-        }, 8000)
-        this.journal.activity({ type: 'mission.completed', level: 'success', agentId: agent.id, missionId, title: `${agent.name} a terminé une mission`, detail: mission.title })
-        this.journal.notify('mission_done', `${agent.name} a terminé`, mission.title, `/missions/${missionId}`)
-      }
-    } catch (err) {
-      flushOutput()
-      const msg = err instanceof Error ? err.message : String(err)
-      const fresh = this.get(missionId)
-      if (canTransition(fresh.status, 'failed')) this.transition(fresh, 'failed', { finishedAt: nowIso(), error: msg, result: text || null })
-      this.event(missionId, executionId, 'failed', msg)
-      this.finishExecution(executionId, 'failed')
-      this.agents.setStatus(agent.id, 'error', msg.slice(0, 120))
-      this.journal.activity({ type: 'mission.failed', level: 'error', agentId: agent.id, missionId, title: `Échec de la mission de ${agent.name}`, detail: msg })
-      this.journal.notify('mission_failed', `Mission échouée · ${agent.name}`, msg, `/missions/${missionId}`)
     } finally {
-      this.running.delete(missionId)
-      this.bus.invalidate('missions', 'agents')
+      flushOutput()
+    }
+    if (!chunkUsage) return { text, usage: null }
+    const cost = this.usage.recordChunk(agent.id, agent.providerId, agent.model, chunkUsage, 'mission')
+    this.event(missionId, executionId, 'usage', `${chunkUsage.inputTokens.toLocaleString('fr-FR')} jetons en entrée · ${chunkUsage.outputTokens.toLocaleString('fr-FR')} en sortie${cost.model !== agent.model ? ` · servi par ${cost.model}` : ''}`, { ...chunkUsage, ...cost })
+    return { text, usage: { inputTokens: chunkUsage.inputTokens, outputTokens: chunkUsage.outputTokens, costUsd: cost.costUsd, costKind: cost.costKind } }
+  }
+
+  private requireWorkspace(agent: Agent): string {
+    if (!agent.workingDirectory) {
+      throw new OrbitError('validation', `Choisissez d’abord le dossier autorisé de ${agent.name} (fiche du compagnon → Permissions).`)
+    }
+    this.checkWorkspace(agent.workingDirectory, agent)
+    return agent.workingDirectory
+  }
+
+  private checkWorkspace(workspace: string | null, agent: Agent) {
+    if (!workspace || !existsSync(workspace) || !statSync(workspace).isDirectory()) {
+      throw new OrbitError('validation', `Le dossier autorisé de ${agent.name} est introuvable : ${workspace ?? 'aucun'}.`)
+    }
+    if (workspace === '/' || workspace === process.env.HOME) {
+      throw new OrbitError('forbidden', 'Par sécurité, un compagnon ne peut pas travailler à la racine du disque ni dans tout votre dossier personnel. Choisissez un dossier de projet.')
     }
   }
 
@@ -296,15 +460,12 @@ export class MissionManager {
     this.bus.emit({ type: 'mission.event', event: toExecutionEvent(row) })
   }
 
-  private finishExecution(id: string, status: string) {
-    this.db.update(missionExecutions).set({ status, finishedAt: nowIso() }).where(eq(missionExecutions.id, id)).run()
-  }
-
   private transition(mission: Mission, to: MissionStatus, extra: Partial<typeof missions.$inferInsert> = {}) {
     if (!canTransition(mission.status, to)) {
       throw new OrbitError('conflict', `Transition interdite : ${MISSION_STATUS_LABELS[mission.status]} → ${MISSION_STATUS_LABELS[to]}.`)
     }
     this.db.update(missions).set({ ...extra, status: to, updatedAt: nowIso() }).where(eq(missions.id, mission.id)).run()
+    mission.status = to
     this.bus.invalidate('missions')
   }
 

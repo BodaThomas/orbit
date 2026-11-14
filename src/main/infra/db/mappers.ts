@@ -9,10 +9,13 @@ import type {
   Conversation,
   CostKind,
   ExecutionEvent,
+  FileChange,
   Message,
   Mission,
+  MissionExecution,
   OrbitNotification,
   ProviderId,
+  ToolCall,
 } from '@shared/types'
 import type * as s from './schema'
 
@@ -63,7 +66,48 @@ export function toMission(row: Row<typeof s.missions>): Mission {
     priority: row.priority as Mission['priority'],
     status: row.status as Mission['status'],
     costKind: row.costKind as CostKind | null,
+    engine: (row.engine as ProviderId | null) ?? null,
   }
+}
+
+export function toExecution(row: Row<typeof s.missionExecutions>): MissionExecution {
+  return {
+    id: row.id,
+    missionId: row.missionId,
+    prompt: row.prompt,
+    status: row.status as MissionExecution['status'],
+    error: row.error,
+    inputTokens: row.inputTokens,
+    outputTokens: row.outputTokens,
+    costUsd: row.costUsd,
+    costKind: row.costKind as CostKind | null,
+    startedAt: row.startedAt,
+    finishedAt: row.finishedAt,
+  }
+}
+
+export function toToolCall(row: Row<typeof s.toolCalls>): ToolCall {
+  return {
+    id: row.id,
+    missionId: row.missionId ?? '',
+    executionId: row.executionId ?? '',
+    agentId: row.agentId,
+    externalId: row.externalId ?? row.id,
+    name: row.name,
+    kind: row.kind as ToolCall['kind'],
+    title: row.title,
+    input: row.input ?? null,
+    output: row.output,
+    files: row.files ?? [],
+    exitCode: row.exitCode,
+    status: row.status as ToolCall['status'],
+    startedAt: row.createdAt,
+    finishedAt: row.finishedAt,
+  }
+}
+
+export function toFileChange(row: Row<typeof s.fileChanges>): FileChange {
+  return { ...row, kind: row.kind as FileChange['kind'] }
 }
 
 export function toExecutionEvent(row: Row<typeof s.executionEvents>): ExecutionEvent {
@@ -75,6 +119,7 @@ export function toApproval(row: Row<typeof s.approvalRequests>): ApprovalRequest
     ...row,
     kind: row.kind as ApprovalRequest['kind'],
     status: row.status as ApprovalRequest['status'],
+    payload: row.payload ?? null,
   }
 }
 

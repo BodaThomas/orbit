@@ -35,14 +35,37 @@ export class UsageTracker {
     inputTokens: number
     outputTokens: number
     source: UsageRecord['source']
+    /** Cost already computed elsewhere (engine estimate, subscription). Otherwise priced from the dated table. */
+    cost?: { costUsd: number | null; costKind: CostKind; pricingVersion: string | null }
   }): { costUsd: number | null; costKind: CostKind } {
-    const est = estimateCost(input.providerId, input.model, input.inputTokens, input.outputTokens)
+    const { cost, ...row } = input
+    const est = cost ?? estimateCost(input.providerId, input.model, input.inputTokens, input.outputTokens)
     this.db
       .insert(usageRecords)
-      .values({ id: newId(), ...input, costUsd: est.costUsd, costKind: est.costKind, pricingVersion: est.pricingVersion, createdAt: nowIso() })
+      .values({ id: newId(), ...row, costUsd: est.costUsd, costKind: est.costKind, pricingVersion: est.pricingVersion, createdAt: nowIso() })
       .run()
     this.bus.invalidate('usage')
     return { costUsd: est.costUsd, costKind: est.costKind }
+  }
+
+  /** Records a provider usage chunk, splitting it per model when a fallback served the turn. */
+  recordChunk(
+    agentId: string,
+    providerId: ProviderId,
+    requestedModel: string,
+    chunk: { inputTokens: number; outputTokens: number; model?: string; byModel?: { model: string; inputTokens: number; outputTokens: number }[] },
+    source: UsageRecord['source'],
+  ): { costUsd: number | null; costKind: CostKind; model: string } {
+    const parts = chunk.byModel?.length ? chunk.byModel : [{ model: chunk.model ?? requestedModel, inputTokens: chunk.inputTokens, outputTokens: chunk.outputTokens }]
+    let costUsd: number | null = 0
+    let costKind: CostKind = 'estimated'
+    for (const part of parts) {
+      const c = this.record({ agentId, providerId, model: part.model, inputTokens: part.inputTokens, outputTokens: part.outputTokens, source })
+      if (c.costUsd == null) costUsd = null
+      else if (costUsd != null) costUsd += c.costUsd
+      if (c.costKind !== 'estimated') costKind = c.costKind
+    }
+    return { costUsd, costKind, model: chunk.model ?? requestedModel }
   }
 
   /** Known spend (official + estimated) since local midnight, optionally per agent. */
@@ -66,6 +89,16 @@ export class UsageTracker {
         .where(gte(usageRecords.createdAt, since))
         .get()?.cost ?? 0
     )
+  }
+
+  /** Smallest remaining amount across every configured limit, or null when none applies. */
+  remainingBudget(agent: { id: string; dailyBudgetUsd: number | null }): number | null {
+    const s = this.settings.get()
+    const left: number[] = []
+    if (agent.dailyBudgetUsd != null) left.push(agent.dailyBudgetUsd - this.spentToday(agent.id))
+    if (s.dailyLimitUsd != null) left.push(s.dailyLimitUsd - this.spentToday())
+    if (s.monthlyBudgetUsd != null) left.push(s.monthlyBudgetUsd - this.spentThisMonth())
+    return left.length ? Math.max(0, Math.min(...left)) : null
   }
 
   /** Returns a human reason if a new execution must be blocked by a budget. */

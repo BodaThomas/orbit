@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm'
 import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
-import type { AgentPermissions, Appearance } from '@shared/types'
+import type { AgentPermissions, ApprovalPayload, Appearance } from '@shared/types'
 
 const now = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`
 const createdAt = () => text('created_at').notNull().default(now)
@@ -131,6 +131,9 @@ export const missions = sqliteTable(
     costKind: text('cost_kind'),
     workflowId: text('workflow_id'),
     parentMissionId: text('parent_mission_id'),
+    engine: text('engine'),
+    sessionId: text('session_id'),
+    workspace: text('workspace'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     startedAt: text('started_at'),
@@ -153,6 +156,12 @@ export const missionExecutions = sqliteTable(
     /** Prevents double-starting the same attempt (scheduler restarts, double clicks). */
     idempotencyKey: text('idempotency_key').notNull(),
     status: text('status').notNull(),
+    prompt: text('prompt'),
+    error: text('error'),
+    inputTokens: integer('input_tokens'),
+    outputTokens: integer('output_tokens'),
+    costUsd: real('cost_usd'),
+    costKind: text('cost_kind'),
     startedAt: text('started_at').notNull(),
     finishedAt: text('finished_at'),
   },
@@ -175,17 +184,44 @@ export const executionEvents = sqliteTable(
   (t) => [index('exec_events_mission_idx').on(t.missionId, t.createdAt)],
 )
 
-export const toolCalls = sqliteTable('tool_calls', {
-  id: text('id').primaryKey(),
-  executionId: text('execution_id'),
-  conversationId: text('conversation_id'),
-  agentId: text('agent_id').notNull(),
-  name: text('name').notNull(),
-  input: text('input', { mode: 'json' }).$type<unknown>(),
-  output: text('output'),
-  status: text('status').notNull(),
-  createdAt: createdAt(),
-})
+export const toolCalls = sqliteTable(
+  'tool_calls',
+  {
+    id: text('id').primaryKey(),
+    executionId: text('execution_id'),
+    conversationId: text('conversation_id'),
+    missionId: text('mission_id').references(() => missions.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id').notNull(),
+    externalId: text('external_id'),
+    name: text('name').notNull(),
+    kind: text('kind').notNull().default('other'),
+    title: text('title').notNull().default(''),
+    input: text('input', { mode: 'json' }).$type<unknown>(),
+    output: text('output'),
+    files: text('files', { mode: 'json' }).$type<string[]>(),
+    exitCode: integer('exit_code'),
+    status: text('status').notNull(),
+    createdAt: createdAt(),
+    finishedAt: text('finished_at'),
+  },
+  (t) => [index('tool_calls_mission_idx').on(t.missionId, t.createdAt), index('tool_calls_external_idx').on(t.executionId, t.externalId)],
+)
+
+export const fileChanges = sqliteTable(
+  'file_changes',
+  {
+    id: text('id').primaryKey(),
+    missionId: text('mission_id')
+      .notNull()
+      .references(() => missions.id, { onDelete: 'cascade' }),
+    executionId: text('execution_id').notNull(),
+    path: text('path').notNull(),
+    kind: text('kind').notNull(),
+    diff: text('diff'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('file_changes_mission_idx').on(t.missionId, t.createdAt)],
+)
 
 export const approvalRequests = sqliteTable(
   'approval_requests',
@@ -195,9 +231,12 @@ export const approvalRequests = sqliteTable(
       .notNull()
       .references(() => agents.id, { onDelete: 'cascade' }),
     missionId: text('mission_id'),
+    executionId: text('execution_id'),
+    toolCallId: text('tool_call_id'),
     kind: text('kind').notNull(),
     summary: text('summary').notNull(),
     detail: text('detail'),
+    payload: text('payload', { mode: 'json' }).$type<ApprovalPayload>(),
     status: text('status').notNull().default('pending'),
     createdAt: createdAt(),
     resolvedAt: text('resolved_at'),

@@ -25,11 +25,37 @@ function mapError(err: unknown): ProviderError {
   return new ProviderError(err instanceof Error ? err.message : String(err), 'unknown')
 }
 
+interface IterationUsage {
+  type: string
+  model?: string | null
+  input_tokens?: number
+  output_tokens?: number
+}
+
+/**
+ * When the server-side fallback serves a turn, `usage.iterations` lists each model that ran
+ * (the declined attempt and the fallback). Each is priced with its own model's rates.
+ */
+export function usageChunk(servedModel: string, usage: { input_tokens: number; output_tokens: number; iterations?: unknown }): StreamChunk {
+  const iterations = Array.isArray(usage.iterations) ? (usage.iterations as IterationUsage[]) : []
+  const fellBack = iterations.some((i) => i.type === 'fallback_message')
+  if (!fellBack) return { type: 'usage', inputTokens: usage.input_tokens, outputTokens: usage.output_tokens, model: servedModel }
+  const byModel = new Map<string, { model: string; inputTokens: number; outputTokens: number }>()
+  for (const it of iterations) {
+    const model = it.model ?? servedModel
+    const entry = byModel.get(model) ?? { model, inputTokens: 0, outputTokens: 0 }
+    entry.inputTokens += it.input_tokens ?? 0
+    entry.outputTokens += it.output_tokens ?? 0
+    byModel.set(model, entry)
+  }
+  return { type: 'usage', inputTokens: usage.input_tokens, outputTokens: usage.output_tokens, model: servedModel, byModel: [...byModel.values()] }
+}
+
 export const anthropicAdapter: ProviderAdapter = {
   id: 'anthropic',
   name: 'Anthropic',
   availability: 'available',
-  capabilities: { streaming: true, cancel: true, tools: false, sessions: false, usage: 'official', apiKeyAuth: true },
+  capabilities: { kind: 'chat', streaming: true, cancel: true, tools: false, sessions: false, usage: 'official', apiKeyAuth: true },
   requiresSecret: true,
   defaultModels: [
     { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', hint: 'Par défaut · polyvalent' },
@@ -43,7 +69,7 @@ export const anthropicAdapter: ProviderAdapter = {
     services: ['claude.ai', 'Claude API', 'Claude Code'],
   },
   notes:
-    'Messages API officielle avec clé Console. Jetons d’entrée/sortie renvoyés par l’API ; coût calculé avec les tarifs publics datés.',
+    'Messages API officielle avec clé Console. Jetons d’entrée/sortie renvoyés par l’API ; coût estimé avec les tarifs publics datés. Sur Opus 5.5, Sonnet 5.5 et Fable 5.2, un refus de sécurité est automatiquement repris par le modèle de secours d’Anthropic (fallback serveur) ; le coût est alors calculé au tarif du modèle qui a réellement répondu.',
 
   async validate(secret) {
     try {
@@ -71,7 +97,7 @@ export const anthropicAdapter: ProviderAdapter = {
         }
       }
       const final = await stream.finalMessage()
-      yield { type: 'usage', inputTokens: final.usage.input_tokens, outputTokens: final.usage.output_tokens }
+      yield usageChunk(final.model, final.usage)
       if (final.stop_reason === 'refusal') {
         throw new ProviderError('Le modèle a refusé de répondre à cette demande.', 'refusal')
       }

@@ -85,6 +85,8 @@ export type ProviderId =
   | 'demo'
 
 export interface ProviderCapabilities {
+  /** `chat`: one request → one streamed answer. `agent`: an engine that runs tools in a workspace. */
+  kind: 'chat' | 'agent'
   streaming: boolean
   cancel: boolean
   tools: boolean
@@ -115,6 +117,8 @@ export interface ProviderInfo {
   statusPage: string | null
   services: string[]
   notes: string
+  /** Engines only: human-readable readiness (auth, binary), refreshed by « Vérifier ». */
+  statusDetail: string | null
 }
 
 export type HealthLevel = 'operational' | 'degraded' | 'outage' | 'unknown'
@@ -202,32 +206,134 @@ export interface Mission {
   costKind: CostKind | null
   workflowId: string | null
   parentMissionId: string | null
+  /** Agent engines only: engine that owns the session, its session id and the folder it may touch. */
+  engine: ProviderId | null
+  sessionId: string | null
+  workspace: string | null
   createdAt: string
   updatedAt: string
   startedAt: string | null
   finishedAt: string | null
 }
 
+export type ExecutionEventType =
+  | 'started'
+  | 'user'
+  | 'session'
+  | 'thinking'
+  | 'output'
+  | 'message'
+  | 'tool'
+  | 'file'
+  | 'approval'
+  | 'warning'
+  | 'usage'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
 export interface ExecutionEvent {
   id: string
   missionId: string
   executionId: string
-  type: 'started' | 'thinking' | 'output' | 'tool' | 'approval' | 'usage' | 'completed' | 'failed' | 'cancelled'
+  type: ExecutionEventType
   message: string
   data: Record<string, unknown> | null
   createdAt: string
+}
+
+export interface MissionExecution {
+  id: string
+  missionId: string
+  /** What the user asked for this run (first brief or a follow-up). */
+  prompt: string | null
+  status: 'running' | 'done' | 'failed' | 'cancelled'
+  error: string | null
+  inputTokens: number | null
+  outputTokens: number | null
+  costUsd: number | null
+  costKind: CostKind | null
+  startedAt: string
+  finishedAt: string | null
+}
+
+/** Normalised tool families shared by every engine. */
+export type ToolKind = 'read' | 'search' | 'edit' | 'command' | 'web' | 'mcp' | 'plan' | 'other'
+export type ToolCallStatus = 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'denied' | 'cancelled'
+
+export interface ToolCall {
+  id: string
+  missionId: string
+  executionId: string
+  agentId: string
+  /** Engine-side identifier (tool_use id, Codex item id). */
+  externalId: string
+  /** Raw engine tool name (Read, Bash, commandExecution…). */
+  name: string
+  kind: ToolKind
+  /** Short human label: « Lit src/app.ts », « npm test ». */
+  title: string
+  input: unknown
+  output: string | null
+  files: string[]
+  exitCode: number | null
+  status: ToolCallStatus
+  startedAt: string
+  finishedAt: string | null
+}
+
+export interface FileChange {
+  id: string
+  missionId: string
+  executionId: string
+  path: string
+  kind: 'add' | 'update' | 'delete'
+  diff: string | null
+  createdAt: string
+}
+
+/** What an approval is about, shown to the user before they decide. */
+export interface ApprovalPayload {
+  tool: string
+  kind: ToolKind
+  command?: string
+  cwd?: string
+  paths?: string[]
+  diff?: string
+  reason?: string
+  engine?: ProviderId
 }
 
 export interface ApprovalRequest {
   id: string
   agentId: string
   missionId: string | null
+  executionId: string | null
+  toolCallId: string | null
   kind: 'mission_start' | 'tool_use' | 'budget_override'
   summary: string
   detail: string | null
+  payload: ApprovalPayload | null
   status: 'pending' | 'approved' | 'denied' | 'expired'
   createdAt: string
   resolvedAt: string | null
+}
+
+/** What a companion is doing right now. Ephemeral, never invented: derived from engine events. */
+export interface LiveActivity {
+  missionId: string
+  phase: 'starting' | 'thinking' | 'tool' | 'writing' | 'approval' | 'finishing'
+  label: string
+  toolCallId: string | null
+  since: string
+}
+
+export interface MissionDetail {
+  mission: Mission
+  events: ExecutionEvent[]
+  executions: MissionExecution[]
+  toolCalls: ToolCall[]
+  fileChanges: FileChange[]
 }
 
 // Activity
@@ -246,6 +352,7 @@ export type ActivityType =
   | 'approval.requested'
   | 'approval.resolved'
   | 'tool.called'
+  | 'tool.denied'
   | 'file.written'
   | 'provider.connected'
   | 'provider.error'

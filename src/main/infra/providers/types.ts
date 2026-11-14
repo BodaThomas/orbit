@@ -14,7 +14,15 @@ export interface StreamRequest {
 
 export type StreamChunk =
   | { type: 'text'; text: string }
-  | { type: 'usage'; inputTokens: number; outputTokens: number }
+  | {
+      type: 'usage'
+      inputTokens: number
+      outputTokens: number
+      /** Model that actually served the answer (differs from the request after a refusal fallback). */
+      model?: string
+      /** Per-model split when several models ran (declined attempt + fallback). */
+      byModel?: { model: string; inputTokens: number; outputTokens: number }[]
+    }
   | { type: 'done'; stopReason: string | null }
 
 export class ProviderError extends Error {
@@ -41,6 +49,8 @@ export interface ProviderAdapter {
   id: ProviderId
   name: string
   availability: 'available' | 'planned'
+  /** Engines read their secret from another provider (Claude Agent SDK → Anthropic key). */
+  secretFrom?: ProviderId
   capabilities: ProviderCapabilities
   requiresSecret: boolean
   defaultModels: ModelInfo[]
@@ -56,7 +66,7 @@ export function plannedAdapter(id: ProviderId, name: string, notes: string): Pro
     id,
     name,
     availability: 'planned',
-    capabilities: { streaming: false, cancel: false, tools: false, sessions: false, usage: 'none', apiKeyAuth: false },
+    capabilities: { kind: 'chat', streaming: false, cancel: false, tools: false, sessions: false, usage: 'none', apiKeyAuth: false },
     requiresSecret: true,
     defaultModels: [],
     statusPage: null,

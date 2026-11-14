@@ -1,8 +1,13 @@
+import { dirname } from 'node:path'
 import type { OrbitSettings } from '@shared/types'
 import { openDatabase, type DatabaseHandle } from '../infra/db/client'
+import { AgentRunner } from './agent-runner'
 import { AgentManager } from './agents'
 import { ConversationManager } from './conversations'
 import { seedDemo } from './demo-seed'
+import { claudeConfigDir, createClaudeAgentEngine, resolveClaudeExecutable } from './engine/claude-agent'
+import { createCodexEngine } from './engine/codex'
+import type { AgentEngine, EngineId } from './engine/types'
 import type { EventBus } from './event-bus'
 import { HealthMonitor } from './health'
 import { Journal } from './journal'
@@ -27,6 +32,7 @@ export class OrbitRuntime {
   readonly memory: MemoryStore
   readonly conversations: ConversationManager
   readonly missions: MissionManager
+  readonly runner: AgentRunner
   readonly health: HealthMonitor
   readonly machines: MachineRegistry
 
@@ -35,18 +41,33 @@ export class OrbitRuntime {
     dbFile: string,
     readonly bus: EventBus,
     platform: PlatformServices,
+    engines?: Partial<Record<EngineId, AgentEngine>>,
   ) {
     this.handle = openDatabase(dbFile)
     const db = this.handle.db
     this.settings = new SettingsStore(db, mode)
     this.journal = new Journal(db, bus, platform, () => this.settings.get().nativeNotifications)
     this.agents = new AgentManager(db, bus, this.journal)
-    this.providers = new ProviderRegistry(db, bus, this.journal, platform.secrets, this.settings, mode)
+    const dataDir = dirname(dbFile)
+    this.providers = new ProviderRegistry(
+      db,
+      bus,
+      this.journal,
+      platform.secrets,
+      this.settings,
+      mode,
+      undefined,
+      engines ?? {
+        'claude-agent': createClaudeAgentEngine({ configDir: claudeConfigDir(dataDir), pathToExecutable: resolveClaudeExecutable() }),
+        codex: createCodexEngine({ clientVersion: platform.appVersion }),
+      },
+    )
     this.usage = new UsageTracker(db, bus, this.settings)
     this.permissions = new PermissionManager(this.journal)
     this.memory = new MemoryStore(db, bus)
     this.conversations = new ConversationManager(db, bus, this.journal, this.agents, this.providers, this.usage, this.permissions, this.memory)
-    this.missions = new MissionManager(db, bus, this.journal, this.agents, this.providers, this.usage, this.permissions, this.memory)
+    this.runner = new AgentRunner(db, bus, this.journal, this.agents, this.usage)
+    this.missions = new MissionManager(db, bus, this.journal, this.agents, this.providers, this.usage, this.permissions, this.memory, this.runner)
     this.health = new HealthMonitor(db, bus, this.journal, platform.fetch)
     this.machines = new MachineRegistry(db)
 

@@ -20,6 +20,9 @@ nativeTheme.themeSource = 'dark'
 
 const dataDir = process.env.ORBIT_DATA_DIR ?? app.getPath('userData')
 mkdirSync(dataDir, { recursive: true })
+// An isolated data dir is also an isolated Electron profile (and single-instance lock),
+// so a test instance can run next to the everyday one.
+if (process.env.ORBIT_DATA_DIR) app.setPath('userData', dataDir)
 const stateFile = join(dataDir, 'orbit-state.json')
 
 function readMode(): 'real' | 'demo' {
@@ -52,6 +55,7 @@ const platform: PlatformServices = {
     n.show()
   },
   fetch: (...args) => fetch(...args),
+  appVersion: app.getVersion(),
 }
 
 let runtime: OrbitRuntime | null = null
