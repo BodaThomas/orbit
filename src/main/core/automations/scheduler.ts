@@ -1,9 +1,9 @@
-import { and, asc, desc, eq, gte, inArray } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, inArray, isNull, sum } from 'drizzle-orm'
 import { TERMINAL_MISSION_STATUSES } from '@shared/mission-states'
 import { describeRecurrence, nextOccurrence, validateRecurrence, type Recurrence } from '@shared/schedule'
 import type { Automation, AutomationRun, AutomationTrigger, MissedPolicy, Mission } from '@shared/types'
 import type { OrbitDb } from '../../infra/db/client'
-import { automationDefinitions, automationRuns, automationTriggers } from '../../infra/db/schema'
+import { automationDefinitions, automationRuns, automationTriggers, missions } from '../../infra/db/schema'
 import type { AgentManager } from '../agents'
 import type { ConstellationEngine } from '../constellations/engine'
 import type { EventBus } from '../event-bus'
@@ -23,7 +23,26 @@ export interface AutomationInput {
   missedPolicy: MissedPolicy
   maxRunsPerDay: number | null
   triggers: Omit<AutomationTrigger, 'id'>[]
+  /** Optional for older callers. */
+  maxDurationMin?: number | null
+  budgetUsd?: number | null
+  failurePolicy?: 'notify' | 'pause'
 }
+
+/**
+ * Orbit Desktop: automations owned by a runtime are scheduled there. Every action on them
+ * is a command to that runtime; this scheduler never fires them.
+ */
+export interface AutomationRemote {
+  push(a: Automation): void
+  setStatus(a: Automation, status: 'active' | 'paused'): void
+  runNow(a: Automation): void
+  confirmRun(a: Automation, runId: string, approve: boolean): void
+  release(a: Automation): void
+}
+
+/** The only automations this scheduler may fire. */
+const OWNED = and(eq(automationDefinitions.schedulerOwner, 'local'), eq(automationDefinitions.ownerState, 'active'))
 
 /** A run is late once its time is this far behind: it is then treated as « missed ». */
 const GRACE_MS = 2 * 60_000
@@ -46,6 +65,12 @@ export class Scheduler {
   private timer: ReturnType<typeof setInterval> | null = null
   private unsub: (() => void) | null = null
   private ticking = false
+  remote: AutomationRemote | null = null
+  /** Last completed tick (health reports). */
+  lastTickAt: string | null = null
+  get running(): boolean {
+    return this.timer !== null
+  }
 
   constructor(
     private db: OrbitDb,
@@ -82,7 +107,7 @@ export class Scheduler {
    */
   recoverOnLaunch(): void {
     const ts = nowIso()
-    for (const r of this.db.select().from(automationRuns).where(eq(automationRuns.status, 'running')).all()) {
+    for (const r of this.db.select().from(automationRuns).where(and(eq(automationRuns.status, 'running'), isNull(automationRuns.machineId))).all()) {
       const done = this.targetOutcome(r)
       if (done) this.closeRun(r.id, done.status, done.note)
       else this.db.update(automationRuns).set({ status: 'uncertain', note: 'Orbit a été fermé pendant l’exécution : résultat incertain, rien n’est relancé automatiquement.', finishedAt: ts }).where(eq(automationRuns.id, r.id)).run()
@@ -150,11 +175,18 @@ export class Scheduler {
       lastRun: last ? this.toRun(last) : null,
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,
+      schedulerOwner: r.schedulerOwner,
+      ownerState: r.ownerState === 'transferring' ? 'transferring' : 'active',
+      pendingOwner: r.pendingOwner,
+      configVersion: r.configVersion,
+      maxDurationMin: r.maxDurationMin,
+      budgetUsd: r.budgetUsd,
+      failurePolicy: r.failurePolicy === 'pause' ? 'pause' : 'notify',
     }
   }
 
   private toRun(r: typeof automationRuns.$inferSelect): AutomationRun {
-    return { ...r, trigger: r.trigger as AutomationRun['trigger'], status: r.status as AutomationRun['status'] }
+    return { ...r, trigger: r.trigger as AutomationRun['trigger'], status: r.status as AutomationRun['status'], machineId: r.machineId ?? null }
   }
 
   // Commands
@@ -175,7 +207,7 @@ export class Scheduler {
     const ts = nowIso()
     const next = input.recurrence ? nextOccurrence(input.recurrence, input.timezone, this.now()) : null
     this.db.transaction((tx) => {
-      tx.insert(automationDefinitions).values({ id, name: input.name, description: input.description, targetKind: input.targetKind, targetId: input.targetId, title: input.title, prompt: input.prompt, recurrence: input.recurrence, timezone: input.timezone, status: 'active', missedPolicy: input.missedPolicy, maxRunsPerDay: input.maxRunsPerDay, nextRunAt: next?.toISOString() ?? null, createdAt: ts, updatedAt: ts }).run()
+      tx.insert(automationDefinitions).values({ id, name: input.name, description: input.description, targetKind: input.targetKind, targetId: input.targetId, title: input.title, prompt: input.prompt, recurrence: input.recurrence, timezone: input.timezone, status: 'active', missedPolicy: input.missedPolicy, maxRunsPerDay: input.maxRunsPerDay, nextRunAt: next?.toISOString() ?? null, maxDurationMin: input.maxDurationMin ?? null, budgetUsd: input.budgetUsd ?? null, failurePolicy: input.failurePolicy ?? 'notify', createdAt: ts, updatedAt: ts }).run()
       for (const t of input.triggers) tx.insert(automationTriggers).values({ id: newId(), automationId: id, kind: t.kind, sourceAgentId: t.sourceAgentId, sourceAutomationId: t.sourceAutomationId, cooldownSec: Math.max(60, t.cooldownSec), createdAt: ts }).run()
     })
     this.journal.audit({ actor: 'user', agentId: input.targetKind === 'agent' ? input.targetId : null, action: 'automation.create', target: input.name, allowed: true, reason: input.recurrence ? describeRecurrence(input.recurrence) : 'déclencheur' })
@@ -184,25 +216,73 @@ export class Scheduler {
   }
 
   update(id: string, input: AutomationInput): Automation {
-    this.get(id)
+    const before = this.get(id)
+    if (before.ownerState === 'transferring') throw new OrbitError('conflict', 'Transfert en cours : attendez sa confirmation avant de modifier cette automatisation.')
     this.validate(input)
+    const remote = before.schedulerOwner !== 'local'
     const next = input.recurrence ? nextOccurrence(input.recurrence, input.timezone, this.now()) : null
     this.db.transaction((tx) => {
-      tx.update(automationDefinitions).set({ name: input.name, description: input.description, targetKind: input.targetKind, targetId: input.targetId, title: input.title, prompt: input.prompt, recurrence: input.recurrence, timezone: input.timezone, missedPolicy: input.missedPolicy, maxRunsPerDay: input.maxRunsPerDay, nextRunAt: next?.toISOString() ?? null, updatedAt: nowIso() }).where(eq(automationDefinitions.id, id)).run()
+      // A runtime-owned automation keeps its runtime-computed schedule until the runtime answers.
+      tx.update(automationDefinitions).set({ name: input.name, description: input.description, targetKind: input.targetKind, targetId: input.targetId, title: input.title, prompt: input.prompt, recurrence: input.recurrence, timezone: input.timezone, missedPolicy: input.missedPolicy, maxRunsPerDay: input.maxRunsPerDay, ...(remote ? {} : { nextRunAt: next?.toISOString() ?? null }), maxDurationMin: input.maxDurationMin ?? null, budgetUsd: input.budgetUsd ?? null, failurePolicy: input.failurePolicy ?? 'notify', configVersion: before.configVersion + 1, updatedAt: nowIso() }).where(eq(automationDefinitions.id, id)).run()
       tx.delete(automationTriggers).where(eq(automationTriggers.automationId, id)).run()
       for (const t of input.triggers) tx.insert(automationTriggers).values({ id: newId(), automationId: id, kind: t.kind, sourceAgentId: t.sourceAgentId, sourceAutomationId: t.sourceAutomationId, cooldownSec: Math.max(60, t.cooldownSec), createdAt: nowIso() }).run()
+    })
+    const after = this.get(id)
+    if (remote) this.requireRemote().push(after)
+    this.bus.invalidate('automations')
+    return after
+  }
+
+  delete(id: string): void {
+    const a = this.get(id)
+    if (a.ownerState === 'transferring') throw new OrbitError('conflict', 'Transfert en cours : attendez sa confirmation.')
+    // Never leave a runtime firing an automation Orbit no longer shows: release it first.
+    if (a.schedulerOwner !== 'local') this.requireRemote().release(a)
+    this.db.delete(automationDefinitions).where(eq(automationDefinitions.id, id)).run()
+    this.bus.invalidate('automations')
+  }
+
+  private requireRemote(): AutomationRemote {
+    if (!this.remote) throw new OrbitError('provider', 'Planificateur distant indisponible.')
+    return this.remote
+  }
+
+  /**
+   * Runtime host: stores Orbit's definition under Orbit's id. The runtime then owns the
+   * schedule (next/last run) and fires it; `released` ones are kept for history only.
+   */
+  upsertFromOrbit(id: string, input: AutomationInput & { status: 'active' | 'paused'; configVersion: number }): Automation {
+    this.validate(input)
+    const existing = this.db.select().from(automationDefinitions).where(eq(automationDefinitions.id, id)).get()
+    const ts = nowIso()
+    const sameSchedule = existing && JSON.stringify(existing.recurrence) === JSON.stringify(input.recurrence) && existing.timezone === input.timezone && existing.status === input.status && existing.schedulerOwner === 'local'
+    const next = input.status === 'active' && input.recurrence ? (sameSchedule && existing?.nextRunAt ? new Date(existing.nextRunAt) : nextOccurrence(input.recurrence, input.timezone, this.now())) : null
+    const values = { name: input.name, description: input.description, targetKind: input.targetKind, targetId: input.targetId, title: input.title, prompt: input.prompt, recurrence: input.recurrence, timezone: input.timezone, status: input.recurrence && input.status === 'active' && !next ? 'completed' : input.status, missedPolicy: input.missedPolicy, maxRunsPerDay: input.maxRunsPerDay, nextRunAt: next?.toISOString() ?? null, maxDurationMin: input.maxDurationMin ?? null, budgetUsd: input.budgetUsd ?? null, failurePolicy: input.failurePolicy ?? 'notify', configVersion: input.configVersion, schedulerOwner: 'local', ownerState: 'active', updatedAt: ts }
+    this.db.transaction((tx) => {
+      if (existing) tx.update(automationDefinitions).set(values).where(eq(automationDefinitions.id, id)).run()
+      else tx.insert(automationDefinitions).values({ id, ...values, createdAt: ts }).run()
+      tx.delete(automationTriggers).where(eq(automationTriggers.automationId, id)).run()
+      for (const t of input.triggers) tx.insert(automationTriggers).values({ id: newId(), automationId: id, kind: t.kind, sourceAgentId: t.sourceAgentId, sourceAutomationId: t.sourceAutomationId, cooldownSec: Math.max(60, t.cooldownSec), createdAt: ts }).run()
     })
     this.bus.invalidate('automations')
     return this.get(id)
   }
 
-  delete(id: string): void {
-    this.db.delete(automationDefinitions).where(eq(automationDefinitions.id, id)).run()
+  /** Runtime host: stops firing (transfer back to the Mac, deletion in Orbit). History is kept. */
+  release(id: string): Automation {
+    this.get(id)
+    this.db.update(automationDefinitions).set({ schedulerOwner: 'released', status: 'paused', nextRunAt: null, updatedAt: nowIso() }).where(eq(automationDefinitions.id, id)).run()
     this.bus.invalidate('automations')
+    return this.get(id)
   }
 
   setStatus(id: string, status: 'active' | 'paused'): Automation {
     const a = this.get(id)
+    if (a.ownerState === 'transferring') throw new OrbitError('conflict', 'Transfert en cours : attendez sa confirmation.')
+    if (a.schedulerOwner !== 'local') {
+      this.requireRemote().setStatus(a, status)
+      return a
+    }
     // Resuming recomputes from now: paused occurrences are not replayed.
     const next = status === 'active' && a.recurrence ? nextOccurrence(a.recurrence, a.timezone, this.now()) : a.nextRunAt ? new Date(a.nextRunAt) : null
     this.db.update(automationDefinitions).set({ status: status === 'active' && a.recurrence && !next ? 'completed' : status, nextRunAt: next?.toISOString() ?? null, updatedAt: nowIso() }).where(eq(automationDefinitions.id, id)).run()
@@ -211,8 +291,13 @@ export class Scheduler {
     return this.get(id)
   }
 
-  runNow(id: string): AutomationRun {
+  runNow(id: string): AutomationRun | null {
     const a = this.get(id)
+    if (a.ownerState === 'transferring') throw new OrbitError('conflict', 'Transfert en cours : attendez sa confirmation.')
+    if (a.schedulerOwner !== 'local') {
+      this.requireRemote().runNow(a)
+      return null
+    }
     return this.fire(a, new Date(this.now()).toISOString(), 'manual', `manual:${id}:${this.now()}`)
   }
 
@@ -221,6 +306,10 @@ export class Scheduler {
     const r = this.db.select().from(automationRuns).where(eq(automationRuns.id, runId)).get()
     if (!r) throw new OrbitError('not_found', 'Exécution introuvable.')
     if (r.status !== 'pending_confirmation') throw new OrbitError('conflict', 'Cette exécution a déjà été traitée.')
+    if (r.machineId) {
+      this.requireRemote().confirmRun(this.get(r.automationId), runId, approve)
+      return this.toRun(r)
+    }
     if (!approve) {
       this.closeRun(r.id, 'skipped', 'Ignorée à votre demande.')
       return this.toRun(this.db.select().from(automationRuns).where(eq(automationRuns.id, runId)).get()!)
@@ -239,7 +328,7 @@ export class Scheduler {
     try {
       this.refreshRunning()
       const now = this.now()
-      const due = this.db.select().from(automationDefinitions).where(and(eq(automationDefinitions.status, 'active'))).all().filter((r) => r.nextRunAt && Date.parse(r.nextRunAt) <= now)
+      const due = this.db.select().from(automationDefinitions).where(and(eq(automationDefinitions.status, 'active'), OWNED)).all().filter((r) => r.nextRunAt && Date.parse(r.nextRunAt) <= now)
       for (const r of due) {
         const a = this.toAutomation(r)
         const late = now - Date.parse(r.nextRunAt!) > GRACE_MS
@@ -250,6 +339,7 @@ export class Scheduler {
         this.fire(a, r.nextRunAt!, 'schedule', `${a.id}:${r.nextRunAt}`)
         this.advance(a)
       }
+      this.lastTickAt = new Date(now).toISOString()
     } finally {
       this.ticking = false
     }
@@ -265,7 +355,7 @@ export class Scheduler {
   /** Past occurrences (Mac asleep, Orbit closed) → one decision per automation, never a burst. */
   private handleMissed() {
     const now = this.now()
-    for (const r of this.db.select().from(automationDefinitions).where(eq(automationDefinitions.status, 'active')).all()) {
+    for (const r of this.db.select().from(automationDefinitions).where(and(eq(automationDefinitions.status, 'active'), OWNED)).all()) {
       if (!r.nextRunAt || now - Date.parse(r.nextRunAt) <= GRACE_MS) continue
       const a = this.toAutomation(r)
       const key = `${a.id}:${r.nextRunAt}`
@@ -273,26 +363,43 @@ export class Scheduler {
       // A sensitive target is never relaunched without a human, whatever the policy says.
       const policy: MissedPolicy = a.missedPolicy === 'run_once' && a.sensitive ? 'ask' : a.missedPolicy
       if (policy === 'skip') {
-        this.insertRun(a.id, r.nextRunAt, 'missed', 'skipped', key, `Exécution du ${when} manquée (Mac éteint ou Orbit fermé) : ignorée selon votre réglage.`)
+        this.insertRun(a.id, r.nextRunAt, 'missed', 'skipped', key, `Exécution du ${when} manquée (${this.downtimeLabel}) : ignorée selon votre réglage.`)
         this.journal.activity({ type: 'automation.skipped', level: 'warning', title: `« ${a.name} » : exécution manquée ignorée`, detail: when })
       } else if (policy === 'run_once') {
         this.fire(a, r.nextRunAt, 'missed', key)
       } else {
-        const id = this.insertRun(a.id, r.nextRunAt, 'missed', 'pending_confirmation', key, `Exécution du ${when} manquée${a.missedPolicy === 'run_once' && a.sensitive ? ' : la cible peut modifier des fichiers, Orbit attend votre confirmation' : ''}.`)
+        const id = this.insertRun(a.id, r.nextRunAt, 'missed', 'pending_confirmation', key, `Exécution du ${when} manquée (${this.downtimeLabel})${a.missedPolicy === 'run_once' && a.sensitive ? ' : la cible peut modifier des fichiers, Orbit attend votre confirmation' : ''}.`)
         if (id) this.journal.notify('approval', `« ${a.name} » a été reportée`, `L’exécution prévue le ${when} n’a pas eu lieu. La lancer maintenant ?`, `/automations?run=${id}`)
       }
       this.advance(a)
     }
   }
 
+  /** Wording for missed runs (« Mac éteint ou Orbit fermé » vs « runtime arrêté »). */
+  downtimeLabel = 'Mac éteint ou Orbit fermé'
+
+  /** API spend of this automation's runs over the last 24 h (measured or estimated; subscriptions unknown). */
+  private spentLast24h(automationId: string): number {
+    const since = new Date(this.now() - 86400_000).toISOString()
+    const ids = this.db.select({ id: automationRuns.missionId }).from(automationRuns).where(and(eq(automationRuns.automationId, automationId), gte(automationRuns.createdAt, since))).all().map((r) => r.id).filter((x): x is string => Boolean(x))
+    if (!ids.length) return 0
+    const row = this.db.select({ total: sum(missions.costUsd) }).from(missions).where(inArray(missions.id, ids)).get()
+    return Number(row?.total ?? 0)
+  }
+
   /** Records the occurrence (idempotent) and launches its target. */
   private fire(a: Automation, scheduledFor: string, trigger: AutomationRun['trigger'], key: string): AutomationRun {
+    if (a.budgetUsd != null && this.spentLast24h(a.id) >= a.budgetUsd) {
+      const id = this.insertRun(a.id, scheduledFor, trigger, 'skipped', key, `Budget de l’automatisation atteint (${a.budgetUsd} $ sur 24 h).`)
+      if (id) this.journal.notify('budget', `« ${a.name} » : budget atteint`, `Exécution ignorée : ${a.budgetUsd} $ dépensés sur 24 h.`, '/automations', `budget:${a.id}:${scheduledFor}`)
+      return this.toRun(this.db.select().from(automationRuns).where(eq(automationRuns.idempotencyKey, key)).get()!)
+    }
     if (a.maxRunsPerDay != null) {
       const since = new Date(this.now() - 86400_000).toISOString()
       const count = this.db.select().from(automationRuns).where(and(eq(automationRuns.automationId, a.id), gte(automationRuns.createdAt, since), inArray(automationRuns.status, ['running', 'done', 'failed', 'uncertain']))).all().length
       if (count >= a.maxRunsPerDay) {
         const id = this.insertRun(a.id, scheduledFor, trigger, 'skipped', key, `Limite de ${a.maxRunsPerDay} exécution(s) par jour atteinte.`)
-        return this.toRun(this.db.select().from(automationRuns).where(eq(automationRuns.id, id ?? '')).get() ?? { id: '', automationId: a.id, scheduledFor, trigger, status: 'skipped', missionId: null, constellationRunId: null, note: null, idempotencyKey: key, startedAt: null, finishedAt: null, createdAt: nowIso() })
+        return this.toRun(this.db.select().from(automationRuns).where(eq(automationRuns.id, id ?? '')).get() ?? { id: '', automationId: a.id, scheduledFor, trigger, status: 'skipped', missionId: null, constellationRunId: null, note: null, idempotencyKey: key, startedAt: null, finishedAt: null, createdAt: nowIso(), machineId: null })
       }
     }
     const id = this.insertRun(a.id, scheduledFor, trigger, 'running', key, null)
@@ -338,9 +445,23 @@ export class Scheduler {
 
   /** Reads the target's state to close finished runs (missions and constellation runs). */
   private refreshRunning() {
-    for (const r of this.db.select().from(automationRuns).where(eq(automationRuns.status, 'running')).all()) {
+    for (const r of this.db.select().from(automationRuns).where(and(eq(automationRuns.status, 'running'), isNull(automationRuns.machineId))).all()) {
       const out = this.targetOutcome(r)
-      if (out) this.closeRun(r.id, out.status, out.note)
+      if (out) {
+        this.closeRun(r.id, out.status, out.note)
+        continue
+      }
+      // Duration limit: the target is stopped, the run is marked failed with the reason.
+      const def = this.db.select({ max: automationDefinitions.maxDurationMin }).from(automationDefinitions).where(eq(automationDefinitions.id, r.automationId)).get()
+      if (def?.max && r.startedAt && this.now() - Date.parse(r.startedAt) > def.max * 60_000) {
+        try {
+          if (r.missionId) this.missions.cancel(r.missionId)
+          else if (r.constellationRunId) this.constellations.cancel(r.constellationRunId)
+        } catch {
+          /* already finished */
+        }
+        this.closeRun(r.id, 'failed', `Durée maximale atteinte (${def.max} min) : arrêtée.`)
+      }
     }
   }
 
@@ -371,6 +492,10 @@ export class Scheduler {
       this.journal.activity({ type: status === 'done' ? 'automation.completed' : 'automation.failed', level: status === 'done' ? 'success' : 'error', title: `« ${a.name} » ${status === 'done' ? 'a terminé' : 'a échoué'}`, detail: note })
       this.journal.notify(status === 'done' ? 'mission_done' : 'mission_failed', `${status === 'done' ? 'Mission planifiée terminée' : 'Mission planifiée échouée'} · ${a.name}`, note ?? a.title, r.missionId ? `/missions/${r.missionId}` : r.constellationRunId ? `/constellations/runs/${r.constellationRunId}` : '/automations')
       if (status === 'done') this.fireEventTriggers('automation.completed', { automationId: a.id, eventId: r.id })
+      if (status === 'failed' && a.failurePolicy === 'pause' && a.status === 'active') {
+        this.db.update(automationDefinitions).set({ status: 'paused', updatedAt: nowIso() }).where(eq(automationDefinitions.id, a.id)).run()
+        this.journal.activity({ type: 'automation.paused', level: 'warning', title: `« ${a.name} » mise en pause après un échec`, detail: note })
+      }
     }
     this.bus.invalidate('automations')
   }
@@ -395,7 +520,7 @@ export class Scheduler {
       if (t.sourceAgentId && t.sourceAgentId !== ev.agentId) continue
       if (t.sourceAutomationId && t.sourceAutomationId !== ev.automationId) continue
       const def = this.db.select().from(automationDefinitions).where(eq(automationDefinitions.id, t.automationId)).get()
-      if (!def || def.status !== 'active') continue
+      if (!def || def.status !== 'active' || def.schedulerOwner !== 'local' || def.ownerState !== 'active') continue
       // Loop protection 1: an automation never reacts to its own runs.
       if (ev.automationId === def.id) continue
       if (ev.missionId && this.db.select().from(automationRuns).where(and(eq(automationRuns.automationId, def.id), eq(automationRuns.missionId, ev.missionId))).get()) continue
