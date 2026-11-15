@@ -292,12 +292,12 @@ describe('constellation distante', () => {
     // The Mac goes away as soon as the run is accepted: the runtime coordinates alone.
     await waitFor(() => { try { return host.core.constellations.run(run.id).status !== 'planning' } catch { return false } }, 4000)
     desk.remote.disconnect(m.id)
-    await waitFor(() => ['done', 'failed'].includes(host.core.constellations.run(run.id).status), 6000)
-    expect(host.core.constellations.run(run.id).status).toBe('done')
+    await waitFor(() => ['completed', 'failed'].includes(host.core.constellations.run(run.id).status), 6000)
+    expect(host.core.constellations.run(run.id).status).toBe('completed')
     expect(codex.prompts[0]).toContain('Le projet utilise TypeScript.')
     // Back on the Mac: the whole run, tasks, handoffs and synthesis, from the runtime.
     await desk.remote.connect(m.id)
-    await waitFor(() => desk.core.constellations.run(run.id).status === 'done', 4000)
+    await waitFor(() => desk.core.constellations.run(run.id).status === 'completed', 4000)
     const d = desk.core.constellations.detail(run.id)
     expect(d.run.synthesis).toContain('Synthèse finale')
     expect(d.tasks.map((t) => [t.spec.key, t.status])).toEqual([['recherche', 'done'], ['dev', 'done']])

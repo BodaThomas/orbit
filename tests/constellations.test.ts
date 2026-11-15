@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { AgentPermissions, ConstellationLimits } from '@shared/types'
-import { DEFAULT_LIMITS } from '../src/main/core/constellations/engine'
+import { ConstellationEngine, DEFAULT_LIMITS } from '../src/main/core/constellations/engine'
 import { findCycle, validatePlan } from '../src/main/core/constellations/protocol'
 import type { AgentEngine, EngineId, EngineRunRequest } from '../src/main/core/engine/types'
 import { makeCore, novaInput, waitFor } from './helpers'
@@ -53,14 +53,14 @@ function scripted(id: EngineId, script: Script) {
 }
 
 /** The coordinator plans on its first call, then synthesises. Members answer with a result. */
-function team(opts: { plan: unknown[] | ((call: number) => string); member?: Script; limits?: Partial<ConstellationLimits>; permissions?: AgentPermissions; mode?: 'shared' | 'worktrees'; coordinatorCanDelegate?: boolean }) {
+function team(opts: { plan: unknown[] | ((call: number, req: EngineRunRequest) => string); member?: Script; limits?: Partial<ConstellationLimits>; permissions?: AgentPermissions; mode?: 'shared' | 'worktrees'; coordinatorCanDelegate?: boolean; planApproval?: 'auto' | 'writes' | 'always' }) {
   const ws = realpathSync(mkdtempSync(join(tmpdir(), 'orbit-const-')))
   let coordCalls = 0
-  const isCoord = (req: EngineRunRequest) => /tu coordonnes|Résultats des sous-missions|a refusé ton plan|Reprends la planification/.test(req.prompt)
+  const isCoord = (req: EngineRunRequest) => /tu coordonnes|Résultats des sous-missions|a refusé ton plan|Reprends la planification|Poursuis la coordination|@coord/.test(req.prompt)
   const claude = scripted('claude-code', (req) => {
     if (isCoord(req)) {
       const n = coordCalls++
-      if (typeof opts.plan === 'function') return { text: opts.plan(n) }
+      if (typeof opts.plan === 'function') return { text: opts.plan(n, req) }
       return { text: n === 0 ? plan(opts.plan) : 'Synthèse finale : tout est prêt.\n\n```orbit-plan\n{"tasks":[]}\n```' }
     }
     return opts.member ? opts.member(req, 0) : { text: result(`fait par claude`) }
@@ -85,8 +85,10 @@ function team(opts: { plan: unknown[] | ((call: number) => string); member?: Scr
     permissions: opts.permissions ?? ALL,
     limits: { ...DEFAULT_LIMITS, ...opts.limits },
     isTemplate: false,
+    planApproval: opts.planApproval ?? 'auto',
   })
-  const done = (runId: string) => waitFor(() => ['done', 'failed', 'cancelled'].includes(core.constellations.run(runId).status), 5000)
+  /** Settled: final, or waiting for the user, with the drive loop stopped. */
+  const done = (runId: string) => waitFor(() => !core.constellations.isActive(runId) && ['completed', 'failed', 'cancelled', 'blocked', 'awaiting_approval', 'paused'].includes(core.constellations.run(runId).status), 5000)
   return { core, ws, nova, milo, atlas, def, claude, codex, done }
 }
 
@@ -130,7 +132,7 @@ describe('constellations — orchestration', () => {
     const run = t.core.constellations.launch(t.def.id, 'Analyse puis modifie le projet')
     await t.done(run.id)
     const d = t.core.constellations.detail(run.id)
-    expect(d.run.status).toBe('done')
+    expect(d.run.status).toBe('completed')
     expect(d.run.synthesis).toContain('Synthèse finale')
     expect(d.run.synthesis).not.toContain('orbit-plan')
     expect(d.tasks.map((x) => [x.spec.key, x.status])).toEqual([['recherche', 'done'], ['dev', 'done']])
@@ -151,7 +153,7 @@ describe('constellations — orchestration', () => {
     const readers = team({ plan: [1, 2, 3].map((i) => ({ id: `r${i}`, assignee: 'Milo', objective: `lecture ${i}`, readOnly: true })), member: () => ({ text: result('ok'), delayMs: 60 }), limits: { maxParallel: 2 } })
     const r = readers.core.constellations.launch(readers.def.id, 'trois lectures')
     await readers.done(r.id)
-    expect(readers.core.constellations.run(r.id).status).toBe('done')
+    expect(readers.core.constellations.run(r.id).status).toBe('completed')
     expect(readers.claude.maxLive()).toBe(2 + 0) // never more than maxParallel members at once (coordinator idle meanwhile)
 
     const writers = team({ plan: [1, 2].map((i) => ({ id: `w${i}`, assignee: 'Atlas', objective: `écriture ${i}` })), member: () => ({ text: result('ok'), delayMs: 40 }), limits: { maxParallel: 2 } })
@@ -186,7 +188,7 @@ describe('constellations — orchestration', () => {
     expect(d.handoffs[0]!.payload).toContain('pas autorisé à déléguer')
   })
 
-  it('une dépendance en échec : les tâches dépendantes sont ignorées, la synthèse a lieu', async () => {
+  it('une dépendance en échec : la constellation est bloquée (rien n’est jeté), puis poursuivie sans elle sur décision', async () => {
     const t = team({
       plan: [
         { id: 'a', assignee: 'Milo', objective: 'échoue', readOnly: true },
@@ -196,9 +198,17 @@ describe('constellations — orchestration', () => {
     })
     const run = t.core.constellations.launch(t.def.id, 'x')
     await t.done(run.id)
-    const d = t.core.constellations.detail(run.id)
-    expect(d.tasks.map((x) => x.status)).toEqual(['failed', 'cancelled'])
-    expect(d.run.status).toBe('done')
+    let d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('blocked')
+    expect(d.run.error).toContain('en échec')
+    expect(d.tasks.map((x) => x.status)).toEqual(['failed', 'todo'])
+    expect(d.actions).toEqual(expect.arrayContaining(['retry', 'resume', 'cancel']))
+    expect(d.progress).toMatchObject({ total: 2, failed: 1, blocked: 1 })
+    t.core.constellations.resume(run.id, { skipFailed: true })
+    await t.done(run.id)
+    d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('completed')
+    expect(d.tasks.map((x) => x.status)).toEqual(['cancelled', 'cancelled'])
     expect(t.codex.log).toHaveLength(0)
   })
 
@@ -206,9 +216,18 @@ describe('constellations — orchestration', () => {
     const t = team({ plan: [1, 2, 3].map((i) => ({ id: `t${i}`, assignee: 'Milo', objective: `tâche ${i}`, readOnly: true })), member: () => ({ text: result('ok'), tokens: 5000 }), limits: { maxParallel: 1, maxTokens: 6000 } })
     const run = t.core.constellations.launch(t.def.id, 'x')
     await t.done(run.id)
-    const d = t.core.constellations.detail(run.id)
+    let d = t.core.constellations.detail(run.id)
     expect(d.tasks.filter((x) => x.status === 'done').length).toBeLessThan(3)
-    expect(d.tasks.some((x) => x.error?.includes('Limite de jetons'))).toBe(true)
+    expect(d.run.status).toBe('blocked')
+    expect(d.run.error).toContain('Limite de jetons')
+    // Remaining tasks are kept to do (not dropped): raise the limit, resume, they run.
+    expect(d.tasks.some((x) => x.status === 'todo')).toBe(true)
+    t.core.constellations.updateLimits(run.id, { maxTokens: 1_000_000 })
+    t.core.constellations.resume(run.id)
+    await t.done(run.id)
+    d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('completed')
+    expect(d.tasks.map((x) => x.status)).toEqual(['done', 'done', 'done'])
   })
 
   it('annulation : aucune sous-mission ne continue, les suivantes sont ignorées', async () => {
@@ -231,7 +250,7 @@ describe('constellations — orchestration', () => {
     const run = t.core.constellations.launch(t.def.id, 'x')
     await t.done(run.id)
     const d = t.core.constellations.detail(run.id)
-    expect(d.run.status).toBe('done')
+    expect(d.run.status).toBe('completed')
     expect(d.tasks.map((x) => x.spec.round)).toEqual([1, 2])
     expect(d.run.synthesis).toBe('Synthèse après deux tours.')
   })
@@ -245,12 +264,17 @@ describe('constellations — orchestration', () => {
     await waitFor(() => !t.core.constellations.isActive(run.id) && !t.core.constellations.detail(run.id).tasks.some((x) => t.core.missions.isRunning(x.missionId)), 3000)
     t.core.handle.sqlite.prepare("UPDATE constellation_runs SET status = 'running' WHERE id = ?").run(run.id)
     t.core.constellations.recoverInterrupted()
-    expect(t.core.constellations.run(run.id).status).toBe('interrupted')
+    expect(t.core.constellations.run(run.id).status).toBe('paused')
     const miloCalls = t.claude.log.filter((l) => l.prompt.includes('premier')).length
+    // « second » was interrupted while it could write: never re-run without an explicit choice.
     t.core.constellations.resume(run.id)
+    let d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('blocked')
+    expect(d.retryable.map((r) => [r.key, r.canWrite, r.interrupted])).toEqual([['b', true, true]])
+    t.core.constellations.retryTasks(run.id, [d.retryable[0]!.missionId])
     await t.done(run.id)
-    const d = t.core.constellations.detail(run.id)
-    expect(d.run.status).toBe('done')
+    d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('completed')
     expect(t.claude.log.filter((l) => l.prompt.includes('premier')).length).toBe(miloCalls) // not re-run
     expect(d.tasks.map((x) => x.status)).toEqual(['done', 'done'])
   })
@@ -260,6 +284,364 @@ describe('constellations — orchestration', () => {
     const a = t.core.constellations.launch(t.def.id, 'x', { idempotencyKey: 'auto:1:2026-11-14T08:00' })
     const b = t.core.constellations.launch(t.def.id, 'x', { idempotencyKey: 'auto:1:2026-11-14T08:00' })
     expect(a.id).toBe(b.id)
+  })
+})
+
+const FINAL = 'Synthèse finale : tout est prêt.\n\n```orbit-plan\n{"tasks":[]}\n```'
+const planWith = (tasks: unknown[], extra: Record<string, unknown> = {}) => `Voici mon plan.\n\n\`\`\`orbit-plan\n${JSON.stringify({ tasks, ...extra })}\n\`\`\``
+
+describe('constellations — cycle de vie persistant', () => {
+  it('1. plan simple : validé par Orbit, exécuté, terminé ; historique des événements', async () => {
+    const t = team({ plan: [{ id: 'a', assignee: 'Milo', objective: 'lire', readOnly: true }] })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    const d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('completed')
+    expect(d.plans.map((p) => [p.version, p.status, p.decidedBy])).toEqual([[1, 'approved', 'policy']])
+    expect(d.events.map((e) => e.kind)).toEqual(expect.arrayContaining(['run.started', 'plan.approved', 'plan.applied', 'task.done', 'round.done', 'run.completed']))
+    // Finished: the only thing left is to give the coordinator a new instruction.
+    expect(d.actions).toEqual(['continue'])
+  })
+
+  it('2 & 3. plan à approuver : rien ne démarre avant l’accord structuré, puis reprise automatique', async () => {
+    const t = team({ plan: [{ id: 'dev', assignee: 'Atlas', objective: 'modifier' }], planApproval: 'writes' })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    let d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('awaiting_approval')
+    expect(d.tasks).toHaveLength(0)
+    expect(t.codex.log).toHaveLength(0)
+    expect(d.pendingPlan?.approvalReason).toContain('modifier des fichiers')
+    expect(d.actions).toEqual(expect.arrayContaining(['approve', 'reject', 'answer', 'cancel']))
+    // A stale hash (plan changed after display) is refused.
+    expect(() => t.core.constellations.approvePlan(run.id, d.pendingPlan!.id, 'autre-hash')).toThrow('a changé')
+    t.core.constellations.approvePlan(run.id, d.pendingPlan!.id, d.pendingPlan!.hash)
+    await t.done(run.id)
+    d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('completed')
+    expect(d.tasks.map((x) => x.status)).toEqual(['done'])
+    expect(d.events.some((e) => e.kind === 'decision.approve' && e.actor === 'user')).toBe(true)
+  })
+
+  it('le coordinateur demande des décisions : la mission collective reste ouverte, la réponse relance le travail', async () => {
+    const t = team({
+      plan: (n) => (n === 0 ? 'Avant de déléguer, deux décisions.\n\n```orbit-plan\n{"tasks":[],"questions":["Palette sombre ?","Garder le slogan ?"]}\n```' : n === 1 ? plan([{ id: 'a', assignee: 'Milo', objective: 'lire', readOnly: true }]) : FINAL),
+    })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    let d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('awaiting_approval') // never « terminée » while the coordinator waits
+    expect(d.pendingPlan?.questions).toHaveLength(2)
+    expect(d.actions).toContain('answer')
+    expect(d.actions).not.toContain('approve')
+    t.core.constellations.answer(run.id, 'Oui aux deux.')
+    await t.done(run.id)
+    d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('completed')
+    expect(t.claude.log.some((l) => l.prompt.includes('Oui aux deux.') && l.prompt.includes('Palette sombre ?'))).toBe(true)
+    expect(d.tasks.map((x) => x.status)).toEqual(['done'])
+  })
+
+  it('une approbation vaut pour une étape : un nouveau tour de délégation redemande l’accord', async () => {
+    const t = team({
+      planApproval: 'always',
+      plan: (n) => (n === 0 ? plan([{ id: 'a', assignee: 'Milo', objective: 'tour 1', readOnly: true }]) : n === 1 ? plan([{ id: 'b', assignee: 'Milo', objective: 'tour 2', readOnly: true }]) : FINAL),
+    })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    t.core.constellations.approvePlan(run.id, t.core.constellations.detail(run.id).pendingPlan!.id)
+    await t.done(run.id)
+    const d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('awaiting_approval')
+    expect(d.pendingPlan?.tasks.map((x) => x.id)).toEqual(['b'])
+    expect(d.tasks.map((x) => x.spec.key)).toEqual(['a'])
+  })
+
+  it('4. pause puis reprise manuelle : rien de nouveau ne démarre, la tâche terminée n’est pas relancée', async () => {
+    const t = team({ plan: [{ id: 'a', assignee: 'Milo', objective: 'premier', readOnly: true }, { id: 'b', assignee: 'Milo', objective: 'second', dependsOn: ['a'], readOnly: true }], member: () => ({ text: result('ok'), delayMs: 150 }) })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await waitFor(() => t.claude.log.some((l) => l.prompt.includes('premier')), 3000)
+    t.core.constellations.pause(run.id)
+    expect(t.core.constellations.detail(run.id).run.status).toBe('paused')
+    await t.done(run.id)
+    let d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('paused')
+    expect(d.tasks.map((x) => x.status)).toEqual(['done', 'todo']) // the running one finished normally
+    expect(t.claude.log.some((l) => l.prompt.includes('second'))).toBe(false)
+    expect(d.actions).toContain('resume')
+    t.core.constellations.resume(run.id)
+    expect(() => t.core.constellations.resume(run.id)).toThrow() // double click
+    await t.done(run.id)
+    d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('completed')
+    expect(t.claude.log.filter((l) => l.prompt.includes('premier'))).toHaveLength(1)
+  })
+
+  it('5 & 6. plan identique reçu plusieurs fois, double clic : aucune sous-mission en double', async () => {
+    const tasks = [{ id: 'a', assignee: 'Milo', objective: 'lire', readOnly: true }]
+    const t = team({ plan: (n) => (n <= 2 ? planWith(tasks, { requestApproval: true }) : FINAL) })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    const coordId = t.core.constellations.run(run.id).coordinatorMissionId!
+    // The user chats with the coordinator, which sends the very same plan again (twice).
+    t.core.missions.followUp(coordId, '@coord tu peux lancer ?')
+    await waitFor(() => !t.core.missions.isRunning(coordId), 3000)
+    t.core.missions.followUp(coordId, '@coord alors ?')
+    await waitFor(() => !t.core.missions.isRunning(coordId), 3000)
+    let d = t.core.constellations.detail(run.id)
+    expect(d.plans.filter((p) => p.status === 'proposed')).toHaveLength(1)
+    expect(d.events.filter((e) => e.kind === 'plan.recognized')).toHaveLength(2)
+    const p = d.pendingPlan!
+    t.core.constellations.approvePlan(run.id, p.id, p.hash)
+    t.core.constellations.approvePlan(run.id, p.id, p.hash) // double click: no-op
+    await t.done(run.id)
+    d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('completed')
+    expect(d.tasks).toHaveLength(1)
+    expect(t.claude.log.filter((l) => l.prompt.includes('Sous-mission confiée'))).toHaveLength(1)
+    // Database guard: the same key cannot be created twice in a run.
+    expect(() => t.core.missions.create({ title: 'dup', description: '', agentId: t.milo.id, priority: 'normal', startNow: false, constellationRunId: run.id, depth: 1, subtask: d.tasks[0]!.spec })).toThrow()
+  })
+
+  it('plan modifié après validation : différences présentées, nouvelle approbation', async () => {
+    const t = team({ planApproval: 'always', plan: [{ id: 'a', assignee: 'Milo', objective: 'lire', readOnly: true }, { id: 'b', assignee: 'Milo', objective: 'puis', dependsOn: ['a'], readOnly: true }], member: (req) => ({ text: result('ok'), delayMs: req.prompt.includes('lire') ? 100 : 0 }) })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    t.core.constellations.approvePlan(run.id, t.core.constellations.detail(run.id).pendingPlan!.id)
+    await waitFor(() => t.claude.log.some((l) => l.prompt.includes('lire')), 3000)
+    t.core.constellations.pause(run.id)
+    await t.done(run.id)
+    // « a » is finished: it can no longer be changed; « b » can, « c » is added.
+    expect(() => t.core.constellations.editPlan(run.id, [{ id: 'a', assignee: 'Milo', objective: 'autre chose', readOnly: true }])).toThrow('terminée')
+    const v = t.core.constellations.editPlan(run.id, [
+      { id: 'a', assignee: 'Milo', objective: 'lire', readOnly: true },
+      { id: 'b', assignee: 'Atlas', objective: 'puis autrement', dependsOn: ['a'], readOnly: true },
+      { id: 'c', assignee: 'Milo', objective: 'en plus', dependsOn: ['a'], readOnly: true },
+    ])
+    expect(v.diff).toMatchObject({ added: ['c'], changed: ['b'], unchanged: ['a'] })
+    let d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('awaiting_approval')
+    t.core.constellations.approvePlan(run.id, v.id, v.hash)
+    await t.done(run.id)
+    d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('completed')
+    expect(d.tasks.map((x) => [x.spec.key, x.agentId === t.atlas.id, x.status])).toEqual(expect.arrayContaining([['a', false, 'done'], ['b', true, 'done'], ['c', false, 'done']]))
+    expect(d.tasks).toHaveLength(3)
+    expect(d.plans.map((p) => p.status)).toEqual(['approved', 'approved'])
+  })
+
+  it('7. sous-mission échouée puis relancée : seules les sélectionnées repartent, les autres résultats restent', async () => {
+    let attempts = 0
+    const t = team({
+      plan: [{ id: 'ok', assignee: 'Milo', objective: 'réussit', readOnly: true }, { id: 'ko', assignee: 'Atlas', objective: 'fragile' }, { id: 'suite', assignee: 'Milo', objective: 'après', dependsOn: ['ko'], readOnly: true }],
+      member: (req) => (req.prompt.includes('fragile') && attempts++ === 0 ? Promise.reject(new Error('panne réseau')) : { text: result('ok') }),
+    })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    let d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('blocked')
+    expect(d.tasks.map((x) => x.status)).toEqual(['done', 'failed', 'todo'])
+    const ko = d.retryable.find((r) => r.key === 'ko')!
+    expect(ko).toMatchObject({ executions: 1, fileChanges: 0, canWrite: true })
+    expect(() => t.core.constellations.retryTasks(run.id, [d.tasks[0]!.missionId])).toThrow('pas en échec')
+    t.core.constellations.retryTasks(run.id, [ko.missionId])
+    await t.done(run.id)
+    d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('completed')
+    expect(d.tasks.map((x) => x.status)).toEqual(['done', 'done', 'done'])
+    expect(t.claude.log.filter((l) => l.prompt.includes('réussit'))).toHaveLength(1)
+  })
+
+  it('8. dépendances entre plusieurs compagnons (losange) : ordre respecté, résultats transmis', async () => {
+    const t = team({
+      plan: [
+        { id: 'src', assignee: 'Milo', objective: 'collecte', readOnly: true },
+        { id: 'g', assignee: 'Atlas', objective: 'gauche', dependsOn: ['src'] },
+        { id: 'd', assignee: 'Milo', objective: 'droite', dependsOn: ['src'], readOnly: true },
+        { id: 'fin', assignee: 'Atlas', objective: 'assemble', dependsOn: ['g', 'd'] },
+      ],
+      member: (req) => ({ text: result(`fait:${req.prompt.match(/## Ton objectif\n(\w+)/)?.[1]}`), delayMs: 20 }),
+      limits: { maxParallel: 3 },
+    })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    const d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('completed')
+    const at = (word: string) => [...t.claude.log, ...t.codex.log].find((l) => l.prompt.includes(`## Ton objectif\n${word}`))!.at
+    expect(at('gauche')).toBeGreaterThanOrEqual(at('collecte'))
+    expect(at('assemble')).toBeGreaterThanOrEqual(Math.max(at('gauche'), at('droite')))
+    const fin = t.codex.log.find((l) => l.prompt.includes('assemble'))!.prompt
+    expect(fin).toContain('fait:gauche')
+    expect(fin).toContain('fait:droite')
+  })
+
+  it('9. fermeture et réouverture d’Orbit : état, plan, décisions conservés ; reprise sans doublon', async () => {
+    const t = team({ planApproval: 'always', plan: [{ id: 'a', assignee: 'Milo', objective: 'rapide', readOnly: true }, { id: 'b', assignee: 'Atlas', objective: 'long' }], member: (req) => ({ text: result('ok'), delayMs: req.prompt.includes('long') ? 3000 : 0 }), limits: { maxParallel: 1 } })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    t.core.constellations.approvePlan(run.id, t.core.constellations.detail(run.id).pendingPlan!.id)
+    await waitFor(() => t.codex.log.length === 1, 3000)
+    // Quit: the loops stop, the running mission is interrupted.
+    t.core.constellations.cancelAll()
+    t.core.missions.cancelAll()
+    await waitFor(() => !t.core.constellations.detail(run.id).tasks.some((x) => t.core.missions.isRunning(x.missionId)), 3000)
+    // Reopen: a fresh engine on the same database.
+    const reopened = new ConstellationEngine(t.core.db, t.core.bus, t.core.journal, t.core.agents, t.core.missions, t.core.providers, join(tmpdir(), 'orbit-wt-reopen'))
+    t.core.missions.recoverInterrupted()
+    reopened.recoverInterrupted()
+    let d = reopened.detail(run.id)
+    expect(d.run.status).toBe('paused')
+    expect(d.run.error).toContain('Orbit a été fermé')
+    expect(d.plans.map((p) => p.status)).toEqual(['approved'])
+    expect(d.events.some((e) => e.kind === 'decision.approve')).toBe(true)
+    expect(reopened.unfinished().map((r) => r.id)).toContain(run.id)
+    expect(d.tasks.map((x) => x.status)).toEqual(['done', 'cancelled'])
+    reopened.resume(run.id)
+    d = reopened.detail(run.id)
+    expect(d.run.status).toBe('blocked') // the interrupted writer is never relaunched blindly
+    reopened.retryTasks(run.id, [d.retryable[0]!.missionId])
+    await waitFor(() => !reopened.isActive(run.id) && reopened.run(run.id).status === 'completed', 6000)
+    expect(reopened.detail(run.id).tasks).toHaveLength(2)
+    expect(t.claude.log.filter((l) => l.prompt.includes('rapide'))).toHaveLength(1)
+  }, 10_000)
+
+  it('9b. une validation en attente survit au redémarrage', async () => {
+    const t = team({ planApproval: 'always', plan: [{ id: 'a', assignee: 'Milo', objective: 'lire', readOnly: true }] })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    t.core.constellations.cancelAll()
+    const reopened = new ConstellationEngine(t.core.db, t.core.bus, t.core.journal, t.core.agents, t.core.missions, t.core.providers, join(tmpdir(), 'orbit-wt-reopen'))
+    reopened.recoverInterrupted()
+    const d = reopened.detail(run.id)
+    expect(d.run.status).toBe('awaiting_approval')
+    reopened.approvePlan(run.id, d.pendingPlan!.id, d.pendingPlan!.hash)
+    await waitFor(() => !reopened.isActive(run.id) && reopened.run(run.id).status === 'completed', 4000)
+  })
+
+  it('10. permissions : compagnon désactivé avant le démarrage, plafond abaissé, jamais contournés par une reprise', async () => {
+    const t = team({ planApproval: 'always', plan: [{ id: 'dev', assignee: 'Atlas', objective: 'écrire' }, { id: 'lit', assignee: 'Milo', objective: 'lire', readOnly: true }] })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    // After the plan was proposed: Atlas is disabled, and the ceiling no longer allows writes.
+    t.core.agents.setEnabled(t.atlas.id, false)
+    t.core.constellations.update(t.def.id, { ...t.def, permissions: { ...ALL, writeFiles: false, runCommands: false } })
+    expect(() => t.core.constellations.approvePlan(run.id, t.core.constellations.detail(run.id).pendingPlan!.id)).toThrow('désactivé')
+    t.core.agents.setEnabled(t.atlas.id, true)
+    t.core.constellations.approvePlan(run.id, t.core.constellations.detail(run.id).pendingPlan!.id)
+    await t.done(run.id)
+    expect(t.codex.log[0]!.perms).toMatchObject({ writeFiles: false, runCommands: false })
+    // Disabled between approval and start of a retry: refused, nothing executed.
+    const t2 = team({ plan: [{ id: 'dev', assignee: 'Atlas', objective: 'écrire' }], member: () => Promise.reject(new Error('panne')) })
+    const r2 = t2.core.constellations.launch(t2.def.id, 'x')
+    await t2.done(r2.id)
+    t2.core.agents.setEnabled(t2.atlas.id, false)
+    const calls = t2.codex.log.length
+    t2.core.constellations.retryTasks(r2.id, [t2.core.constellations.detail(r2.id).retryable[0]!.missionId])
+    await t2.done(r2.id)
+    const d2 = t2.core.constellations.detail(r2.id)
+    expect(d2.run.status).toBe('blocked')
+    expect(d2.tasks[0]!.error).toContain('désactivé')
+    expect(t2.codex.log.length).toBe(calls)
+  })
+
+  it('11. bloc orbit-plan invalide : erreur affichée (jamais ignorée), y compris hors orchestration', async () => {
+    const broken = 'Plan :\n\n```orbit-plan\n{"tasks":[{"id":"a",,]}\n```'
+    expect(validatePlan(broken, { definition: { coordinatorAgentId: 'n', members: [], limits: { maxSubtasks: 8 } }, agents: [], existing: [], coordinatorCanDelegate: true }).errors[0]).toContain('JSON valide')
+    const t = team({ plan: (n) => (n === 0 ? FINAL : broken) })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    expect(t.core.constellations.run(run.id).status).toBe('completed')
+    t.core.missions.followUp(t.core.constellations.run(run.id).coordinatorMissionId!, '@coord encore une chose')
+    await waitFor(() => t.core.constellations.run(run.id).status === 'blocked', 3000)
+    const d = t.core.constellations.detail(run.id)
+    expect(d.run.error).toContain('JSON valide')
+    expect(d.plans.at(-1)!.status).toBe('invalid')
+    expect(d.events.some((e) => e.kind === 'plan.invalid' && e.level === 'error')).toBe(true)
+  })
+
+  it('12. coordinateur terminé alors que des sous-missions restent : jamais « terminée »', async () => {
+    const t = team({
+      plan: (n) => (n === 0 ? plan([{ id: 'ko', assignee: 'Atlas', objective: 'fragile' }, { id: 'suite', assignee: 'Milo', objective: 'après', dependsOn: ['ko'], readOnly: true }]) : 'Tout est bon pour moi.\n\n```orbit-plan\n{"tasks":[]}\n```'),
+      member: (req) => (req.prompt.includes('fragile') ? Promise.reject(new Error('panne')) : { text: result('ok'), delayMs: 300 }),
+    })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    expect(t.core.constellations.run(run.id).status).toBe('blocked')
+    t.core.constellations.answer(run.id, 'On peut conclure ?')
+    await t.done(run.id)
+    const d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('blocked')
+    expect(d.run.error).toContain('restent à faire')
+    expect(d.events.some((e) => e.kind === 'run.incoherent')).toBe(true)
+  })
+
+  it('pendant l’exécution, la discussion directe avec le coordinateur est refusée (les actions de la constellation s’appliquent)', async () => {
+    const t = team({ plan: [{ id: 'a', assignee: 'Milo', objective: 'long', readOnly: true }], member: () => ({ text: result('ok'), delayMs: 400 }) })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await waitFor(() => t.claude.log.some((l) => l.prompt.includes('Sous-mission')), 3000)
+    expect(() => t.core.missions.followUp(t.core.constellations.run(run.id).coordinatorMissionId!, '@coord lance tout')).toThrow('constellation est en cours')
+    await t.done(run.id)
+    expect(t.core.constellations.run(run.id).status).toBe('completed')
+  })
+
+  it('synthèse qui demande une validation, « lance les sous-missions » en discussion → plan capturé, limites, approbation, exécution sans doublon', async () => {
+    const round1 = [
+      { id: 'nova-audit', assignee: 'Milo', objective: 'audit technique', readOnly: true },
+      { id: 'pixel-da', assignee: 'Atlas', objective: 'direction artistique' },
+    ]
+    const impl = Array.from({ length: 8 }, (_, i) => ({ id: `impl-${i + 1}`, assignee: i % 2 ? 'Milo' : 'Atlas', objective: `implémentation ${i + 1}`, dependsOn: i ? [`impl-${i}`] : ['nova-audit'], readOnly: i % 2 === 1 }))
+    const t = team({
+      limits: { maxSubtasks: 8, maxDepth: 2, maxParallel: 2 },
+      plan: (n, req) => {
+        if (n === 0) return plan(round1)
+        if (n === 1) return 'Synthèse. Me répondre sur les décisions 1 à 8 ; une fois validé je lancerai la phase d’implémentation.\n\n```orbit-plan\n{"tasks":[]}\n```'
+        if (req.prompt.includes('@coord')) return `Je ne peux pas lancer moi-même les sous-missions : c’est l’orchestrateur Orbit.\n\n${planWith(impl)}`
+        return FINAL
+      },
+    })
+    const run = t.core.constellations.launch(t.def.id, 'refonte landing')
+    await t.done(run.id)
+    expect(t.core.constellations.run(run.id).status).toBe('completed')
+    const coordId = t.core.constellations.run(run.id).coordinatorMissionId!
+    t.core.missions.followUp(coordId, '@coord OK pour les recommandations. Je te laisse lancer les sous-missions')
+    await waitFor(() => t.core.constellations.run(run.id).status === 'blocked', 3000)
+    let d = t.core.constellations.detail(run.id)
+    // The plan is not lost: kept, with the reason it cannot start yet (2 + 8 > 8).
+    expect(d.pendingPlan?.tasks).toHaveLength(8)
+    expect(d.run.error).toContain('Trop de sous-missions : 10')
+    expect(d.actions).toContain('raise_limits')
+    t.core.constellations.updateLimits(run.id, { maxSubtasks: 10 })
+    d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('awaiting_approval') // a chat reply never counts as approval
+    expect(d.pendingPlan?.approvalReason).toContain('conversationnelle')
+    t.core.constellations.approvePlan(run.id, d.pendingPlan!.id, d.pendingPlan!.hash)
+    await waitFor(() => !t.core.constellations.isActive(run.id) && t.core.constellations.run(run.id).status === 'completed', 8000)
+    d = t.core.constellations.detail(run.id)
+    expect(d.tasks).toHaveLength(10)
+    expect(d.tasks.every((x) => x.status === 'done')).toBe(true)
+    expect(t.claude.log.filter((l) => l.prompt.includes('audit technique') && l.prompt.includes('Sous-mission'))).toHaveLength(1)
+    expect(d.tasks.filter((x) => x.spec.key.startsWith('impl')).every((x) => x.spec.round === 2)).toBe(true)
+  }, 15_000)
+
+  it('récupération d’une exécution antérieure au cycle de vie (« done » + plan resté dans la discussion)', async () => {
+    const t = team({ plan: [{ id: 'audit', assignee: 'Milo', objective: 'audit', readOnly: true }] })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    const sql = t.core.handle.sqlite
+    const coordId = t.core.constellations.run(run.id).coordinatorMissionId!
+    // Rewind to the legacy state (before run lifecycles): status « done », no plans, no read marker, a later chat reply holding a plan.
+    sql.prepare("UPDATE constellation_runs SET status = 'done', last_ingested_execution_id = NULL, finished_at = '2026-11-14T19:46:56.329Z' WHERE id = ?").run(run.id)
+    sql.prepare('DELETE FROM constellation_plans WHERE run_id = ?').run(run.id)
+    sql.prepare('INSERT INTO mission_executions (id, mission_id, idempotency_key, status, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?)').run('legacy-exec', coordId, `${coordId}:99`, 'done', '2026-11-14T19:51:33.442Z', '2026-11-14T19:52:10.750Z')
+    sql.prepare('UPDATE missions SET result = ? WHERE id = ?').run(`Je ne peux pas lancer les sous-missions moi-même.\n\n${planWith([{ id: 'impl', assignee: 'Atlas', objective: 'implémenter', dependsOn: ['audit'] }])}`, coordId)
+    t.core.constellations.recoverInterrupted()
+    t.core.constellations.recoverInterrupted() // idempotent at every boot
+    const d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('awaiting_approval')
+    expect(d.plans.map((p) => [p.version, p.status, p.source])).toEqual([[1, 'approved', 'coordinator'], [2, 'proposed', 'conversation']])
+    expect(d.pendingPlan?.diff).toMatchObject({ added: ['impl'] })
+    expect(d.events.some((e) => e.kind === 'plan.recovered')).toBe(true)
+    expect(d.tasks).toHaveLength(1) // nothing executed automatically
   })
 })
 
@@ -290,7 +672,7 @@ describe('constellations — worktrees Git (réel)', () => {
     const run = t.core.constellations.launch(t.def.id, 'deux propositions')
     await t.done(run.id)
     const d = t.core.constellations.detail(run.id)
-    expect(d.run.status).toBe('done')
+    expect(d.run.status).toBe('completed')
     const wts = d.workspaces.filter((w) => w.kind === 'worktree')
     expect(wts).toHaveLength(2)
     // Separate checkouts, the user's folder untouched.
