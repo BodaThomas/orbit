@@ -11,16 +11,10 @@ import { useConfirm } from '@/orbit/Confirm'
 import { ConstellationMap } from '@/orbit/ConstellationMap'
 import { OrbitEmptyState } from '@/orbit/EmptyState'
 import { navigate } from '@/stores/router'
+import { ACTIVE_RUN_STATUSES, RUN_STATUS_INFO, TERMINAL_RUN_STATUSES } from '@shared/constellation-states'
 
-export const RUN_STATUS: Record<ConstellationRun['status'], { label: string; tone: 'accent' | 'success' | 'danger' | 'warning' | 'neutral' }> = {
-  planning: { label: 'Planification', tone: 'accent' },
-  running: { label: 'En cours', tone: 'accent' },
-  synthesizing: { label: 'Synthèse', tone: 'accent' },
-  done: { label: 'Terminée', tone: 'success' },
-  failed: { label: 'Échec', tone: 'danger' },
-  cancelled: { label: 'Arrêtée', tone: 'neutral' },
-  interrupted: { label: 'Interrompue', tone: 'warning' },
-}
+/** Kept for existing imports: labels and tones of the run lifecycle. */
+export const RUN_STATUS = RUN_STATUS_INFO
 
 export function LaunchDialog({ def, onClose }: { def: ConstellationDefinition | null; onClose: () => void }) {
   const [goal, setGoal] = useState('')
@@ -133,7 +127,9 @@ export function ConstellationsPage() {
   const [launching, setLaunching] = useState<ConstellationDefinition | null>(null)
   const byId = useMemo(() => new Map((agents.data ?? []).map((a) => [a.id, a])), [agents.data])
   const list = defs.data ?? []
-  const active = (runs.data ?? []).filter((r) => ['planning', 'running', 'synthesizing'].includes(r.status))
+  const active = (runs.data ?? []).filter((r) => ACTIVE_RUN_STATUSES.includes(r.status))
+  // Unfinished runs survive a restart: waiting for a decision, paused, blocked or failed.
+  const unfinished = (runs.data ?? []).filter((r) => !ACTIVE_RUN_STATUSES.includes(r.status) && !TERMINAL_RUN_STATUSES.includes(r.status))
 
   return (
     <Page wide>
@@ -169,6 +165,22 @@ export function ConstellationsPage() {
             <DefinitionCard key={d.id} def={d} lastRun={(runs.data ?? []).find((r) => r.constellationId === d.id)} onLaunch={() => setLaunching(d)} />
           ))}
         </div>
+      )}
+      {unfinished.length > 0 && (
+        <Panel title={<span>Missions inachevées <span className="font-normal text-fg-3">· à reprendre, valider ou débloquer</span></span>} className="mb-4">
+          <div className="space-y-px">
+            {unfinished.map((r) => (
+              <button key={r.id} onClick={() => navigate(`/constellations/runs/${r.id}`)} className="grid w-full grid-cols-[150px_minmax(0,1fr)_120px] items-center gap-3 rounded-[10px] px-3 py-2 text-left hover:bg-white/[0.03]">
+                <span><Badge tone={RUN_STATUS[r.status].tone}>{RUN_STATUS[r.status].label}</Badge></span>
+                <span className="min-w-0">
+                  <span className="block truncate text-[13px] text-fg">{r.goal.split('\n')[0]}</span>
+                  <span className="block truncate text-2xs text-fg-3">{r.constellationName} · {r.error ?? RUN_STATUS[r.status].hint}</span>
+                </span>
+                <span className="text-right text-2xs text-fg-3">{relative(r.createdAt)}</span>
+              </button>
+            ))}
+          </div>
+        </Panel>
       )}
       {(runs.data?.length ?? 0) > 0 && (
         <Panel title="Exécutions récentes">

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, ArrowRight, Check, Crown, FolderOpen, GitBranch, ShieldCheck, TriangleAlert, Users } from 'lucide-react'
 import { DEFAULT_PERMISSIONS, PERMISSION_LABELS } from '@shared/catalog'
 import { ENGINE_INFO, isAgentEngine } from '@shared/engines'
-import type { AgentPermissions, ConstellationLimits, ConstellationMember } from '@shared/types'
+import type { PlanApprovalPolicy, AgentPermissions, ConstellationLimits, ConstellationMember } from '@shared/types'
 import { Page } from '@/components/shell/Page'
 import { Button } from '@/components/ui/button'
 import { Badge, Input, Label, Segmented, Switch, Textarea } from '@/components/ui/field'
@@ -36,9 +36,10 @@ interface Draft {
   permissions: AgentPermissions
   limits: ConstellationLimits
   isTemplate: boolean
+  planApproval: PlanApprovalPolicy
 }
 
-const empty = (): Draft => ({ name: '', description: '', objective: '', coordinatorAgentId: null, members: [], workspace: null, workspaceMode: 'shared', permissions: { ...DEFAULT_PERMISSIONS, readFiles: true, writeFiles: true }, limits: { ...DEFAULT_LIMITS }, isTemplate: false })
+const empty = (): Draft => ({ name: '', description: '', objective: '', coordinatorAgentId: null, members: [], workspace: null, workspaceMode: 'shared', permissions: { ...DEFAULT_PERMISSIONS, readFiles: true, writeFiles: true }, limits: { ...DEFAULT_LIMITS }, isTemplate: false, planApproval: 'writes' })
 
 function NumberField({ label, hint, value, onChange, min, max, step = 1, suffix, nullable }: { label: string; hint?: string; value: number | null; onChange: (v: number | null) => void; min: number; max: number; step?: number; suffix?: string; nullable?: boolean }) {
   return (
@@ -290,6 +291,19 @@ export function ConstellationWizardPage({ constellationId }: { constellationId?:
                   <NumberField label="Tours de délégation" hint="Profondeur" value={d.limits.maxDepth} onChange={(v) => set('limits', { ...d.limits, maxDepth: v ?? 1 })} min={1} max={5} />
                 </div>
                 <p className="mt-2 text-xs text-fg-3">Un membre ne peut pas déléguer à son tour, et le coordinateur ne peut pas se confier de mission : aucune boucle possible.</p>
+              </div>
+              <div>
+                <div className="mb-2 text-xs font-medium text-fg-2">Validation des plans</div>
+                <Segmented
+                  value={d.planApproval}
+                  onChange={(v) => set('planApproval', v)}
+                  options={[
+                    { value: 'auto', label: 'Automatique', title: 'Les plans validés par Orbit démarrent aussitôt' },
+                    { value: 'writes', label: 'Si le plan modifie', title: 'Votre accord quand une sous-mission peut modifier des fichiers ou exécuter des commandes' },
+                    { value: 'always', label: 'Toujours', title: 'Votre accord pour chaque plan' },
+                  ]}
+                />
+                <p className="mt-2 text-xs text-fg-3">Dans tous les cas, un plan reçu au fil d’une discussion avec le coordinateur, ou que le coordinateur vous soumet lui-même, attend votre accord explicite. Un accord vaut pour un plan précis, pas pour les suivants.</p>
               </div>
             </div>
           )}

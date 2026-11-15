@@ -1,3 +1,4 @@
+import { ACTIVE_RUN_STATUSES } from '@shared/constellation-states'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { LocateFixed, Minus, Plus, Rocket, Server, Waypoints } from 'lucide-react'
 import { ACTIVE_MISSION_STATUSES } from '@shared/mission-states'
@@ -63,7 +64,7 @@ export function UniversePage() {
   const runs = useConstellationRuns()
   const automations = useAutomations()
   // Real constellations (definitions); « active » only while a run is actually in progress.
-  const activeRunDefs = new Set((runs.data ?? []).filter((r) => ['planning', 'running', 'synthesizing'].includes(r.status)).map((r) => r.constellationId))
+  const activeRunDefs = new Set((runs.data ?? []).filter((r) => ACTIVE_RUN_STATUSES.includes(r.status)).map((r) => r.constellationId))
   const workflows = { data: (defs.data ?? []).filter((d) => !d.isTemplate).map((d) => ({ id: d.id, name: d.name, coordinatorAgentId: d.coordinatorAgentId, memberAgentIds: d.members.map((m) => m.agentId), status: activeRunDefs.has(d.id) ? 'active' : 'done', missionId: null, createdAt: d.createdAt })) }
   const missions = useMissions()
   const remoteMachines = useRemoteMachines()

@@ -1,3 +1,4 @@
+import { ACTIVE_RUN_STATUSES, RUN_STATUS_INFO } from '@shared/constellation-states'
 import { ArrowRight, CalendarClock, Server, Waypoints } from 'lucide-react'
 import { Badge } from '@/components/ui/field'
 import { relative } from '@/lib/format'
@@ -28,7 +29,7 @@ export function OverviewMotion() {
   const machines = useRemoteMachines()
   const agents = useAgents()
   const missions = useMissions()
-  const activeRuns = (runs.data ?? []).filter((r) => ['planning', 'running', 'synthesizing'].includes(r.status))
+  const activeRuns = (runs.data ?? []).filter((r) => ACTIVE_RUN_STATUSES.includes(r.status))
   const recentRuns = (runs.data ?? []).slice(0, 2)
   const upcoming = (automations.data ?? []).filter((a) => a.status === 'active' && a.nextRunAt).sort((a, b) => a.nextRunAt!.localeCompare(b.nextRunAt!)).slice(0, 3)
   const pendingConfirm = (automations.data ?? []).filter((a) => a.lastRun?.status === 'pending_confirmation').length
@@ -49,7 +50,7 @@ export function OverviewMotion() {
           recentRuns.map((r) => (
             <button key={r.id} onClick={() => navigate(`/constellations/runs/${r.id}`)} className="flex w-full items-center gap-2 text-left">
               <span className="min-w-0 flex-1 truncate text-fg-3">{r.constellationName}</span>
-              <Badge tone={r.status === 'done' ? 'success' : r.status === 'failed' ? 'danger' : 'neutral'}>{r.status === 'done' ? 'Synthèse livrée' : r.status === 'failed' ? 'Échec' : 'Arrêtée'}</Badge>
+              <Badge tone={RUN_STATUS_INFO[r.status].tone}>{RUN_STATUS_INFO[r.status].label}</Badge>
             </button>
           ))
         ) : (

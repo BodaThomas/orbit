@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, Crown, FileDiff, GitMerge, Play, RotateCcw, Server, Square, Trash2, Waypoints } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Crown, FileDiff, GitMerge, Server, Trash2, Waypoints } from 'lucide-react'
 import { effectivePermissions } from '@shared/permissions-matrix'
 import { ENGINE_INFO } from '@shared/engines'
 import type { Agent, ConstellationRunDetail, ConstellationTask } from '@shared/types'
@@ -21,7 +21,8 @@ import { navigate } from '@/stores/router'
 import { Tooltip } from '@/components/ui/overlay'
 import { useRemoteState } from '@/orbit/RemoteMission'
 import { useUi } from '@/stores/ui'
-import { RUN_STATUS } from './Constellations'
+import { RUN_STATUS_INFO } from '@shared/constellation-states'
+import { PendingPlanCard, RunEvents, RunStatusBanner } from '@/orbit/RunControls'
 
 function taskState(t: ConstellationTask): LinkState {
   if (t.status === 'running' || t.status === 'waiting') return 'working'
@@ -252,17 +253,13 @@ function RunMachineBadge({ machineId }: { machineId: string }) {
 export function ConstellationRunPage({ runId }: { runId: string }) {
   const q = useConstellationRun(runId)
   const agents = useAgents()
-  const confirm = useConfirm()
   const [view, setView] = useState<'universe' | 'list' | 'timeline'>('universe')
   const [selected, setSelected] = useState<string | null>(null)
   const activity = useUi((s) => s.missionActivity)
-  const cancel = useAction('constellations.cancel', { success: 'Constellation arrêtée' })
-  const resume = useAction('constellations.resume', { success: 'Reprise en cours' })
   const byId = useMemo(() => new Map((agents.data ?? []).map((a) => [a.id, a])), [agents.data])
   if (q.isLoading || !q.data) return <Page wide><Skeleton className="h-[480px] rounded-xl" /></Page>
   const d = q.data
   const { run } = d
-  const active = ['planning', 'running', 'synthesizing'].includes(run.status)
   const members = d.definition?.members ?? [{ agentId: run.coordinatorAgentId, role: 'Coordination', responsibilities: '', canDelegate: true }]
   const coordMission = run.coordinatorMissionId
   const nodes = members
@@ -272,7 +269,7 @@ export function ConstellationRunPage({ runId }: { runId: string }) {
       const coordinator = m.agentId === run.coordinatorAgentId
       const tasks = d.tasks.filter((t) => t.agentId === m.agentId)
       const working = tasks.find((t) => ['running', 'approval_required'].includes(t.status))
-      const state: LinkState = coordinator ? (run.status === 'failed' ? 'error' : run.status === 'done' ? 'done' : (run.status === 'planning' || run.status === 'synthesizing') ? 'working' : 'idle') : memberState(tasks)
+      const state: LinkState = coordinator ? (run.status === 'failed' ? 'error' : run.status === 'completed' ? 'done' : run.status === 'awaiting_approval' ? 'awaiting' : (run.status === 'planning' || run.status === 'synthesizing') ? 'working' : 'idle') : memberState(tasks)
       const live = coordinator ? (coordMission ? activity[coordMission] : null) : working ? activity[working.missionId] : null
       return {
         agent,
@@ -280,7 +277,7 @@ export function ConstellationRunPage({ runId }: { runId: string }) {
         coordinator,
         state,
         activity: live?.label ?? null,
-        caption: coordinator ? { planning: 'Planifie', running: `Suit ${d.tasks.filter((t) => ['running', 'approval_required'].includes(t.status)).length} sous-mission(s)`, synthesizing: 'Rédige la synthèse', done: 'Synthèse livrée', failed: 'Échec', cancelled: 'Arrêtée', interrupted: 'Interrompue' }[run.status] : working ? working.spec.objective.split('\n')[0] : tasks.at(-1)?.structured?.summary ?? null,
+        caption: coordinator ? { planning: 'Planifie', ready: 'Plan validé', awaiting_approval: 'Attend votre décision', running: `Suit ${d.tasks.filter((t) => ['running', 'approval_required'].includes(t.status)).length} sous-mission(s)`, synthesizing: 'Rédige la synthèse', completed: 'Mission collective terminée', paused: 'En pause', blocked: 'Bloquée', failed: 'Échec', cancelled: 'Annulée' }[run.status] : working ? working.spec.objective.split('\n')[0] : tasks.at(-1)?.structured?.summary ?? null,
       }
     })
     .filter((n): n is MapNode => n !== null)
@@ -298,7 +295,7 @@ export function ConstellationRunPage({ runId }: { runId: string }) {
           <div className="flex items-center gap-2.5">
             <Waypoints className="size-5 text-accent" />
             <h1 className="truncate text-[22px] leading-8 font-semibold tracking-[-0.015em] text-fg">{run.constellationName}</h1>
-            <Badge tone={RUN_STATUS[run.status].tone}>{RUN_STATUS[run.status].label}</Badge>
+            <Badge tone={RUN_STATUS_INFO[run.status].tone}>{RUN_STATUS_INFO[run.status].label}</Badge>
             {run.machineId && <RunMachineBadge machineId={run.machineId} />}
           </div>
           <p className="mt-0.5 line-clamp-2 text-[13.5px] text-fg-2">{run.goal}</p>
@@ -307,37 +304,16 @@ export function ConstellationRunPage({ runId }: { runId: string }) {
             <span>{d.tasks.length} / {run.limits.maxSubtasks} sous-missions</span>
             <span>{compactNumber(totalTokens)} jetons{run.limits.maxTokens ? ` / ${compactNumber(run.limits.maxTokens)}` : ''}</span>
             <span>{run.costUsd != null ? `${money(run.costUsd)} mesurés ou estimés` : 'aucune dépense mesurée'}</span>
-            <span>{duration(run.startedAt, run.finishedAt)}</span>
+            <span>{run.finishedAt ? duration(run.startedAt, run.finishedAt) : `ouverte depuis ${duration(run.startedAt)}`}</span>
             {run.origin === 'automation' && <span>déclenchée par une automatisation</span>}
           </div>
         </div>
         <div className="flex shrink-0 gap-2">
           {coordMission && <Button variant="ghost" onClick={() => navigate(`/missions/${coordMission}`)}>Coordination <ArrowRight /></Button>}
-          {active && (
-            <Button variant="secondary" onClick={async () => { if (await confirm({ title: 'Arrêter la constellation ?', body: 'Toutes les sous-missions en cours sont interrompues (leurs processus sont arrêtés) et les suivantes ne démarrent pas.', confirm: 'Arrêter', danger: true })) cancel.mutate({ id: run.id }) }}>
-              <Square /> Arrêter
-            </Button>
-          )}
-          {['interrupted', 'failed', 'cancelled'].includes(run.status) && (
-            <Button
-              variant="primary"
-              onClick={async () => {
-                const again = d.tasks.filter((t) => t.status !== 'done')
-                const sensitive = again.filter((t) => t.permissions.writeFiles || t.permissions.runCommands)
-                const ok = await confirm({
-                  title: 'Reprendre la constellation ?',
-                  body: `${d.tasks.length - again.length} sous-mission(s) terminée(s) conservée(s). ${again.length} seront relancée(s)${sensitive.length ? `, dont ${sensitive.length} pouvant modifier des fichiers ou exécuter des commandes (${sensitive.map((t) => t.spec.key).join(', ')}) : leur résultat précédent est incertain, vérifiez le dossier avant de continuer` : ''}.`,
-                  confirm: 'Reprendre',
-                })
-                if (ok) resume.mutate({ id: run.id })
-              }}
-            >
-              <RotateCcw /> Reprendre
-            </Button>
-          )}
         </div>
       </div>
-      {run.error && <div className="mb-4 rounded-[12px] bg-danger/[0.06] px-4 py-3 text-[13px] text-danger ring-1 ring-danger/15">{run.error}</div>}
+      <RunStatusBanner detail={d} byId={byId} />
+      <PendingPlanCard detail={d} byId={byId} />
 
       <div className="mb-3 flex items-center justify-between">
         <Segmented value={view} onChange={setView} options={[{ value: 'universe', label: 'Univers' }, { value: 'list', label: 'Liste' }, { value: 'timeline', label: 'Timeline' }]} />
@@ -353,7 +329,7 @@ export function ConstellationRunPage({ runId }: { runId: string }) {
         {view === 'universe' && <ConstellationMap nodes={nodes} dependencies={deps} runId={run.id} height={440} selected={selected} onSelect={(id) => setSelected(selected === id ? null : id)} />}
         {view === 'list' && (
           <section className="card p-2">
-            {d.tasks.length === 0 && <OrbitEmptyState compact title={run.status === 'planning' ? 'Le coordinateur planifie…' : 'Aucune sous-mission'} body="Les sous-missions apparaissent dès que le plan du coordinateur est validé par Orbit." />}
+            {d.tasks.length === 0 && <OrbitEmptyState compact title={run.status === 'planning' ? 'Le coordinateur planifie…' : run.status === 'awaiting_approval' ? 'Plan en attente de votre validation' : 'Aucune sous-mission'} body="Les sous-missions apparaissent dès que le plan du coordinateur est validé (par Orbit et, si nécessaire, par vous)." />}
             {d.tasks.map((t) => {
               const a = byId.get(t.agentId)
               return (
@@ -376,12 +352,13 @@ export function ConstellationRunPage({ runId }: { runId: string }) {
       </div>
 
       {(run.synthesis || run.status === 'synthesizing') && (
-        <Panel title={<span className="flex items-center gap-2"><Crown className="size-3.5 text-accent" /> Synthèse de {byId.get(run.coordinatorAgentId)?.name}</span>} className="mb-4">
+        <Panel title={<span className="flex items-center gap-2"><Crown className="size-3.5 text-accent" /> {run.status === 'completed' ? 'Synthèse finale' : 'Dernier message'} de {byId.get(run.coordinatorAgentId)?.name}</span>} className="mb-4">
           <div className="prose-orbit px-3 pb-3">{run.synthesis ? <Markdown text={run.synthesis} /> : <span className="text-[13px] text-fg-3">Rédaction en cours…</span>}</div>
         </Panel>
       )}
+      <RunEvents events={d.events} />
       <Workspaces detail={d} byId={byId} />
-      {!active && !run.synthesis && run.status === 'done' && <div className="text-[13px] text-fg-3"><Play className="inline size-3.5" /> Terminé sans synthèse.</div>}
+      {!run.synthesis && run.status === 'completed' && <div className="text-[13px] text-fg-3">Mission collective terminée sans synthèse.</div>}
     </Page>
   )
 }

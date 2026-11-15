@@ -33,7 +33,8 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/field'
 import { cn } from '@/lib/cn'
 import { clock, dateTime, duration, integer, money } from '@/lib/format'
-import { useAction, useAgent, useApprovals, useMission, useProviders } from '@/lib/queries'
+import { useAction, useAgent, useApprovals, useConstellationRun, useMission, useProviders } from '@/lib/queries'
+import { RUN_STATUS_INFO } from '@shared/constellation-states'
 import { ApprovalRequestCard, DiffView } from '@/orbit/ApprovalRequest'
 import { CompanionAvatar } from '@/orbit/CompanionAvatar'
 import { useConfirm } from '@/orbit/Confirm'
@@ -355,6 +356,7 @@ export function MissionDetailPage({ missionId, focusApproval }: { missionId: str
       <button onClick={() => navigate('/missions')} className="no-drag mb-2 flex items-center gap-1 text-[13px] text-fg-3 hover:text-fg">
         <ArrowLeft className="size-3.5" /> Missions
       </button>
+      {mission.constellationRunId && <ConstellationLink runId={mission.constellationRunId} coordinator={mission.depth === 0} />}
       <div className="mb-6 flex items-start justify-between gap-6">
         <div className="min-w-0">
           <div className="mb-1 flex items-center gap-2.5 text-xs text-fg-3">
@@ -524,5 +526,24 @@ export function MissionDetailPage({ missionId, focusApproval }: { missionId: str
         </aside>
       </div>
     </Page>
+  )
+}
+
+/**
+ * A mission that belongs to a constellation: its own end (one exchange, one sub-mission) is not
+ * the end of the collective mission, whose real state is shown here.
+ */
+function ConstellationLink({ runId, coordinator }: { runId: string; coordinator: boolean }) {
+  const q = useConstellationRun(runId)
+  const run = q.data?.run
+  if (!run) return null
+  const info = RUN_STATUS_INFO[run.status]
+  return (
+    <button onClick={() => navigate(`/constellations/runs/${runId}`)} className="no-drag mb-4 flex w-full items-center gap-2 rounded-[12px] bg-white/[0.03] px-3 py-2 text-left text-[12.5px] ring-1 ring-line hover:bg-white/[0.05]">
+      <span className="text-fg-3">{coordinator ? 'Coordination de' : 'Sous-mission de'} « {run.constellationName} »</span>
+      <Badge tone={info.tone}>Mission collective : {info.label.toLowerCase()}</Badge>
+      <span className="min-w-0 flex-1 truncate text-fg-3">{q.data!.pendingPlan ? 'un plan attend votre validation' : `${q.data!.progress.done} / ${q.data!.progress.total} sous-missions terminées`}</span>
+      <span className="text-fg-2">Ouvrir →</span>
+    </button>
   )
 }
