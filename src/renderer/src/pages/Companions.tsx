@@ -1,4 +1,5 @@
 import { ENGINE_INFO } from '@shared/engines'
+import { AUTONOMY_LABELS } from '@shared/permission-labels'
 import { useMemo, useState } from 'react'
 import { MessageCircle, MoreHorizontal, Plus, Rocket } from 'lucide-react'
 import { ACTIVE_MISSION_STATUSES } from '@shared/mission-states'
@@ -16,7 +17,7 @@ import { ProviderMark } from '@/orbit/ProviderMark'
 import { cn } from '@/lib/cn'
 import { navigate } from '@/stores/router'
 
-const AUTONOMY = { manual: 'Manuel', supervised: 'Supervisé', automated: 'Automatisé' } as const
+const AUTONOMY = AUTONOMY_LABELS
 const STATUS_TEXT: Partial<Record<string, string>> = { working: 'text-accent', awaiting_approval: 'text-warning', error: 'text-danger' }
 
 export function CompanionsPage() {

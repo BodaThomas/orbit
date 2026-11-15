@@ -4,6 +4,7 @@ import { PALETTES, PERMISSION_LABELS, STATUS_LABELS } from '@shared/catalog'
 import { ACTIVE_MISSION_STATUSES } from '@shared/mission-states'
 import { ENGINE_INFO, EFFORT_LEVELS } from '@shared/engines'
 import { effectivePermissions } from '@shared/permissions-matrix'
+import { AUTONOMY_LABELS } from '@shared/permission-labels'
 import { missionCounts } from '@shared/stats'
 import type { Agent, AgentPermissions, EffectiveLevel, EffectivePermissionRow, MemoryKind } from '@shared/types'
 import { Page } from '@/components/shell/Page'
@@ -317,7 +318,7 @@ function Config({ agent }: { agent: Agent }) {
     ['Facturation', engine.billing],
     ['Modèle', agent.model === 'default' ? 'Modèle par défaut du moteur' : agent.model],
     ['Effort de raisonnement', agent.effort ? (EFFORT_LEVELS.find((e) => e.id === agent.effort)?.label ?? agent.effort) : 'Par défaut'],
-    ['Autonomie', { manual: 'Manuel', supervised: 'Supervisé', automated: 'Automatisé' }[agent.autonomy]],
+    ['Autonomie', AUTONOMY_LABELS[agent.autonomy]],
     ['Isolation', agent.isolation === 'strict' ? 'Renforcée (Seatbelt Orbit)' : 'Standard (politique + bac à sable du moteur)'],
     ['Dossier de travail', agent.workingDirectory ?? '—'],
     ['Machine', machine ? `${machine.name} · ${machine.status === 'online' ? 'en ligne' : `hors ligne${machine.lastSyncedAt ? `, synchronisée ${relative(machine.lastSyncedAt)}` : ''}`}` : agent.runtime === 'remote' ? 'Machine distante introuvable' : 'Ce Mac'],
@@ -370,7 +371,7 @@ export function CompanionProfilePage({ agentId, tab }: { agentId: string; tab?: 
     activity: activity.data?.length,
     memory: memory.data?.length,
   }
-  const autonomy = { manual: 'Manuel', supervised: 'Supervisé', automated: 'Automatisé' }[agent.autonomy]
+  const autonomy = AUTONOMY_LABELS[agent.autonomy]
   const presence =
     running && running.startedAt
       ? `Travaille sur « ${running.title} » depuis ${duration(running.startedAt)}`

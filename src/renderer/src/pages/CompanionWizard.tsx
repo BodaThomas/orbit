@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, FolderOpen, Laptop, Lock, Server, ShieldCheck, Sparkles, Wand2, Zap } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, FolderOpen, Laptop, Lock, Rocket, Server, ShieldCheck, Sparkles, Wand2, Zap } from 'lucide-react'
 import { COMPANION_PRESETS, DEFAULT_PERMISSIONS, EXPRESSIONS, PALETTE_IDS, PALETTES, PERMISSION_LABELS, SPECIES, TEXTURES } from '@shared/catalog'
 import { AUTONOMY_EXPLAINED } from '@shared/permission-labels'
 import { EFFORT_LEVELS, isAgentEngine } from '@shared/engines'
@@ -29,6 +29,7 @@ const AUTONOMY: { id: AutonomyLevel; label: string; body: string; icon: typeof L
   { id: 'manual', label: AUTONOMY_EXPLAINED.manual.label, body: AUTONOMY_EXPLAINED.manual.short, icon: Lock },
   { id: 'supervised', label: AUTONOMY_EXPLAINED.supervised.label, body: AUTONOMY_EXPLAINED.supervised.short, icon: ShieldCheck },
   { id: 'automated', label: AUTONOMY_EXPLAINED.automated.label, body: AUTONOMY_EXPLAINED.automated.short, icon: Zap },
+  { id: 'autonomous', label: AUTONOMY_EXPLAINED.autonomous.label, body: AUTONOMY_EXPLAINED.autonomous.short, icon: Rocket },
 ]
 
 function initialDraft(): AgentInput {
@@ -424,7 +425,7 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
             <div className="space-y-6">
               <div>
                 <Label>Niveau d’autonomie</Label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
                   {AUTONOMY.map((a) => {
                     const Icon = a.icon
                     return (
@@ -441,6 +442,11 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
                     )
                   })}
                 </div>
+                {draft.autonomy === 'autonomous' && (
+                  <p className="mt-2 rounded-[10px] bg-warning/[0.08] px-3 py-2 text-xs leading-relaxed text-fg-2 ring-1 ring-warning/30">
+                    Autonomie complète : ce compagnon ne vous demandera jamais d’accord. Installations, Git distant, suppressions, déploiements, secrets et outils externes s’exécutent sans confirmation (et sans le bac à sable des commandes de Claude), puis sont journalisés. Seules les permissions désactivées ci‑dessous et les données d’Orbit restent bloquées — réduisez-les pour borner ce qu’il peut faire, et activez l’isolation renforcée pour garder une barrière du système.
+                  </p>
+                )}
               </div>
               <div>
                 <Label hint="Appliquées par Orbit, pas par le modèle">Permissions</Label>
@@ -460,7 +466,7 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
                 </div>
                 <p className="mt-2 text-xs leading-relaxed text-fg-3">
                   {provider?.capabilities.kind === 'agent'
-                    ? `Chaque action de ${provider.name} est vérifiée par Orbit avant de s’exécuter, uniquement dans le dossier autorisé. Une permission désactivée bloque l’action ; ${draft.autonomy === 'automated' ? 'en mode automatique, seules les actions sensibles vous sont soumises' : draft.autonomy === 'supervised' ? 'en mode supervisé, lectures, modifications, tests et compilation se font sans vous déranger ; installations, déploiements, Git distant ou destructif, secrets et suppressions massives attendent votre accord' : 'en mode manuel, chaque modification, commande ou accès réseau attend votre accord'}.`
+                    ? `Chaque action de ${provider.name} est vérifiée par Orbit avant de s’exécuter, uniquement dans le dossier autorisé. Une permission désactivée bloque l’action ; ${draft.autonomy === 'autonomous' ? 'en autonomie complète, tout ce que ces permissions autorisent s’exécute sans jamais vous solliciter' : draft.autonomy === 'automated' ? 'en mode automatique, seules les actions sensibles vous sont soumises' : draft.autonomy === 'supervised' ? 'en mode supervisé, lectures, modifications, tests et compilation se font sans vous déranger ; installations, déploiements, Git distant ou destructif, secrets et suppressions massives attendent votre accord' : 'en mode manuel, chaque modification, commande ou accès réseau attend votre accord'}.`
                     : `Ce fournisseur répond sans outils : ces permissions s’appliqueront s’il passe sur un moteur agent${sensitive.length > 0 && draft.autonomy === 'supervised' ? '. En mode supervisé, chaque mission demandera votre approbation' : ''}.`}
                 </p>
               </div>

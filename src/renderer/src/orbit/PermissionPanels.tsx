@@ -1,4 +1,4 @@
-import { Check, Lock, ShieldCheck, Undo2, X, Zap } from 'lucide-react'
+import { Check, Lock, Rocket, ShieldCheck, Undo2, X, Zap } from 'lucide-react'
 import { AUTONOMY_EXPLAINED, CATEGORY_LABELS } from '@shared/permission-labels'
 import type { Agent, AutonomyLevel } from '@shared/types'
 import { Button } from '@/components/ui/button'
@@ -8,12 +8,12 @@ import { relative } from '@/lib/format'
 import { useAction, useAgents, useAutoLog, useGrants } from '@/lib/queries'
 import { navigate } from '@/stores/router'
 
-const MODE_ICON = { manual: Lock, supervised: ShieldCheck, automated: Zap } as const
+const MODE_ICON = { manual: Lock, supervised: ShieldCheck, automated: Zap, autonomous: Rocket } as const
 
-/** The three autonomy modes, with the current one highlighted. */
+/** The autonomy modes, with the current one highlighted. */
 export function AutonomyModes({ current }: { current: AutonomyLevel }) {
   return (
-    <div className="grid grid-cols-3 gap-2">
+    <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
       {(Object.keys(AUTONOMY_EXPLAINED) as AutonomyLevel[]).map((k) => {
         const m = AUTONOMY_EXPLAINED[k]
         const Icon = MODE_ICON[k]
@@ -43,7 +43,8 @@ export function AutonomyModes({ current }: { current: AutonomyLevel }) {
 export function AutoAllowedList({ agent }: { agent: Agent }) {
   const p = agent.permissions
   const manual = agent.autonomy === 'manual'
-  const auto = agent.autonomy === 'automated'
+  const full = agent.autonomy === 'autonomous'
+  const auto = agent.autonomy === 'automated' || full
   const codex = agent.providerId === 'codex'
   const items: { label: string; on: boolean; note?: string }[] = [
     { label: 'Lire des fichiers dans le dossier autorisé', on: p.readFiles },
@@ -53,6 +54,13 @@ export function AutoAllowedList({ agent }: { agent: Agent }) {
     { label: 'Tests et vérifications : npm test, tsc --noEmit, eslint, cargo test…', on: p.runCommands && !manual, note: codex && !auto ? 'premier accord demandé (commandes Codex non confinées)' : undefined },
     { label: 'Compilation et Git local : npm run build, git add, git commit…', on: p.runCommands && p.writeFiles && !manual, note: codex && !auto ? 'premier accord demandé' : undefined },
     { label: 'Pages et recherches web', on: p.network && auto },
+    ...(full
+      ? [
+          { label: 'Installations, Git distant ou destructif, suppressions, déploiements, publication', on: p.runCommands, note: 'autonomie complète : exécuté puis journalisé' },
+          { label: 'Fichiers sensibles, hooks, chemins hors du dossier', on: p.readFiles || p.writeFiles || p.runCommands, note: 'les données d’Orbit restent refusées' },
+          { label: 'Outils externes (MCP)', on: p.externalActions },
+        ]
+      : []),
     { label: 'Commandes que vous avez autorisées « toujours »', on: true },
   ]
   return (
