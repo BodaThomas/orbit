@@ -24,6 +24,9 @@ import type { RunPolicy } from './types'
  *     deploy, delete…)
  *   outside the folder    deny for file tools · ask for commands (never grantable)
  *   Orbit's own data      deny, always
+ *
+ * `autonomous` (full delegation, explicit opt-in): never `ask`. Everything the companion's
+ * permission switches allow runs and is logged; Orbit's own data stays refused.
  */
 
 export interface ToolAction {
@@ -174,6 +177,8 @@ export function evaluateTool(policy: RunPolicy, action: ToolAction): PolicyVerdi
   const protectedHit = paths.map((x) => inProtected(policy, x)).find(Boolean)
   if (protectedHit) return deny('protected.path', 'protected', `Données d’Orbit protégées : un compagnon ne peut ni lire ni modifier ses propres permissions (${protectedHit}).`)
 
+  if (autonomy === 'autonomous') return evaluateAutonomous(policy, action)
+
   const outside = paths.find((path) => !isInside(workspace, path))
   const sensitive = paths.find((path) => isSensitivePath(realResolve(workspace, path)) || isSensitivePath(path))
 
@@ -216,6 +221,49 @@ export function evaluateTool(policy: RunPolicy, action: ToolAction): PolicyVerdi
       return ask('mcp.ask', 'mcp', 'Action externe : toujours soumise à validation.', { key: `mcp:${action.target ?? action.name}`, label: `Outil externe ${action.target ?? action.name}`, max: 'mission' })
     default:
       // Unknown tools fail closed.
+      return deny('tool.unknown', 'protected', `Outil « ${action.name} » non pris en charge par Orbit.`)
+  }
+}
+
+/**
+ * Full delegation: no human in the loop, ever. The companion's permission switches still
+ * bind (a disabled permission is a refusal, not a question) and Orbit's data stays out of
+ * reach; everything else runs and lands in the « done without confirmation » log.
+ */
+function evaluateAutonomous(policy: RunPolicy, action: ToolAction): PolicyVerdict {
+  const { permissions: p, workspace } = policy
+  const auto = (rule: string, category: ActionCategory, reason: string, routine = true) => allow(`autonomous.${rule}`, category, `${reason} (autonomie complète)`, routine)
+  switch (action.kind) {
+    case 'plan':
+      return allow('plan', 'plan', 'Outil interne de planification.')
+    case 'read':
+    case 'search': {
+      if (!p.readFiles) return deny('read.disabled', 'read', 'Lecture de fichiers non autorisée pour ce compagnon.')
+      const unusual = action.paths.filter(Boolean).find((x) => !isInside(workspace, x) || isSensitivePath(realResolve(workspace, x)) || isSensitivePath(x))
+      return auto('read', 'read', unusual ? `Lecture de ${unusual}` : 'Lecture.', Boolean(unusual))
+    }
+    case 'edit':
+      if (!p.writeFiles) return deny('edit.disabled', 'edit', 'Modification de fichiers non autorisée pour ce compagnon.')
+      return auto('edit', 'edit', 'Modification de fichier.')
+    case 'command': {
+      if (!p.runCommands) return deny('command.disabled', 'opaque', 'Exécution de commandes non autorisée pour ce compagnon.')
+      const command = action.command ?? ''
+      const cwd = action.paths[0] ? realResolve(workspace, action.paths[0]) : workspace
+      const a = analyzeCommand(command, realRootOf(workspace), cwd)
+      const protectedHit = [...a.paths, ...absolutePathsIn(command), ...action.paths].map((x) => inProtected(policy, x)).find(Boolean)
+      if (protectedHit) return deny('command.protected', 'protected', `La commande vise les données d’Orbit (${protectedHit}) : un compagnon ne peut pas modifier ses propres permissions.`)
+      if (a.needs.write && !p.writeFiles && (ROUTINE.includes(a.category) || a.category === 'delete' || a.category === 'git-destructive'))
+        return deny('command.needs-write', a.category, `Cette commande modifie des fichiers (${(CATEGORY_LABELS[a.category] ?? a.category).toLowerCase()}) : modification non autorisée pour ce compagnon.`)
+      if (a.needs.network && !p.network && a.category !== 'privileged') return deny('command.needs-network', a.category, `Cette commande a besoin du réseau (${a.reason}) : accès réseau non autorisé pour ce compagnon.`)
+      return auto(`command.${a.category}`, a.category, `${CATEGORY_LABELS[a.category] ?? 'Commande'} : ${a.reason}`, a.category !== 'readonly')
+    }
+    case 'web':
+      if (!p.network) return deny('web.disabled', 'web', 'Accès réseau non autorisé pour ce compagnon.')
+      return auto('web', 'web', 'Accès web.')
+    case 'mcp':
+      if (!p.externalActions) return deny('mcp.disabled', 'mcp', 'Actions externes non autorisées pour ce compagnon.')
+      return auto('mcp', 'mcp', `Action externe ${action.target ?? action.name}.`)
+    default:
       return deny('tool.unknown', 'protected', `Outil « ${action.name} » non pris en charge par Orbit.`)
   }
 }

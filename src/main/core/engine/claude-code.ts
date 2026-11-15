@@ -147,7 +147,8 @@ export function claudeSandboxSettings(req: EngineRunRequest): Record<string, unk
   const p = req.policy
   return {
     sandbox: {
-      enabled: true,
+      // Full delegation: no command sandbox (see claude-agent.ts). Orbit's hook still decides.
+      enabled: p.autonomy !== 'autonomous',
       failIfUnavailable: p.commandsContained === true,
       autoAllowBashIfSandboxed: false,
       allowUnsandboxedCommands: false,

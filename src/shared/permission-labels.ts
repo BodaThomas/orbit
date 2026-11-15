@@ -27,7 +27,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   command: 'Commande',
 }
 
-/** Families that always need a human, whatever the autonomy mode. */
+/** Families that need a human in every mode except full autonomy (`autonomous`). */
 export const SENSITIVE_CATEGORIES = ['install', 'git-remote', 'delete', 'git-destructive', 'hooks', 'publish', 'database', 'deploy', 'secrets', 'privileged', 'outside', 'mcp']
 
 export const SCOPE_LABELS = { once: 'Une fois', mission: 'Pour cette mission', always: 'Toujours (ce compagnon, ce dossier)' } as const
@@ -49,4 +49,12 @@ export const AUTONOMY_EXPLAINED = {
     short: 'Exécute des missions prévues en continu dans un périmètre limité, sans demandes répétitives.',
     points: ['Tout ce que permet le mode supervisé, plus les accès web', 'Commandes inconnues : décidées par le mode auto de Claude quand il est actif, sinon bac à sable', 'Actions sensibles : toujours votre accord, même la nuit'],
   },
+  autonomous: {
+    label: 'Autonome',
+    short: 'Délégation complète : ne vous demande jamais rien, dans la limite de ses permissions.',
+    points: ['Aucune demande de validation, ni pour démarrer ni pendant la mission', 'Installations, Git distant, suppressions, déploiements, secrets, MCP, hors du dossier : exécutés et journalisés', 'Restent refusés : les données d’Orbit et ce que ses permissions désactivées interdisent'],
+  },
 } as const
+
+/** Plain label per mode, for chips and lists. */
+export const AUTONOMY_LABELS = { manual: 'Manuel', supervised: 'Supervisé', automated: 'Automatisé', autonomous: 'Autonome' } as const

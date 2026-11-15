@@ -39,7 +39,11 @@ export type AgentStatus =
   | 'offline'
   | 'disabled'
 
-export type AutonomyLevel = 'manual' | 'supervised' | 'automated'
+/**
+ * `autonomous`: full delegation, opted into explicitly per companion. Orbit never asks - only
+ * its own data stays refused and the companion's permission switches stay binding.
+ */
+export type AutonomyLevel = 'manual' | 'supervised' | 'automated' | 'autonomous'
 
 /** `standard`: levels 1–2 (Orbit policy + engine sandbox). `strict`: + Orbit Seatbelt read confinement (level 3, host). */
 export type IsolationMode = 'standard' | 'strict'

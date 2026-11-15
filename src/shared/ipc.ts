@@ -75,7 +75,7 @@ export const agentInputSchema = z.object({
   providerId,
   model: z.string().min(1).max(120),
   instructions: z.string().max(20_000),
-  autonomy: z.enum(['manual', 'supervised', 'automated']),
+  autonomy: z.enum(['manual', 'supervised', 'automated', 'autonomous']),
   permissions: permissionsSchema,
   workingDirectory: z.string().max(1024).nullable(),
   dailyBudgetUsd: z.number().min(0).max(10_000).nullable(),

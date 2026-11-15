@@ -34,6 +34,13 @@ export class PermissionManager {
 
     if (action === 'conversation.send') return { allowed: true, requiresApproval: false, reason: null }
 
+    // Full delegation: the companion's switches still bind, but nobody is ever asked.
+    if (agent.autonomy === 'autonomous') {
+      if (action === 'mission.start') return { allowed: true, requiresApproval: false, reason: null }
+      if (!agent.permissions[action]) return { allowed: false, requiresApproval: false, reason: `Permission « ${action} » non accordée.` }
+      return { allowed: true, requiresApproval: false, reason: null }
+    }
+
     if (action === 'mission.start') {
       if (agent.autonomy === 'manual' && origin === 'automation') {
         return { allowed: false, requiresApproval: false, reason: 'Mode manuel : seules vos demandes déclenchent une mission.' }

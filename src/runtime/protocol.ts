@@ -113,7 +113,7 @@ export const agentSyncSchema = z.object({
   providerId: z.enum(['claude-code', 'codex', 'claude-agent', 'anthropic', 'openai']),
   model: z.string().min(1).max(120),
   instructions: z.string().max(40_000),
-  autonomy: z.enum(['manual', 'supervised', 'automated']),
+  autonomy: z.enum(['manual', 'supervised', 'automated', 'autonomous']),
   permissions,
   project: project.nullable(),
   isolation: z.enum(['standard', 'strict']),

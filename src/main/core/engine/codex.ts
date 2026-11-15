@@ -55,7 +55,7 @@ const MAX_OUTPUT = 8_000
 
 export function codexSandbox(policy: RunPolicy): { mode: 'read-only' | 'workspace-write'; sandboxPolicy: SandboxPolicy; approvalPolicy: AskForApproval } {
   const { permissions: p, autonomy, workspace } = policy
-  const automated = autonomy === 'automated'
+  const automated = autonomy === 'automated' || autonomy === 'autonomous'
   // Supervised companions get a read-only sandbox: every write must be escalated, so
   // every write reaches Orbit as an approval request (answered by the tool policy).
   const canWriteFreely = p.writeFiles && automated
@@ -64,6 +64,7 @@ export function codexSandbox(policy: RunPolicy): { mode: 'read-only' | 'workspac
     sandboxPolicy: canWriteFreely
       ? { type: 'workspaceWrite', writableRoots: [workspace], networkAccess: p.network, excludeTmpdirEnvVar: false, excludeSlashTmp: false }
       : { type: 'readOnly', networkAccess: p.network },
+    // Escalations still reach Orbit's policy, which answers them itself in autonomous mode.
     // With « run commands »: commands run freely *inside* the sandbox (read-only, no network
     // unless allowed) and anything leaving it is escalated to Orbit. Without it: « untrusted »,
     // only Codex's own safe read commands (ls, cat, rg…) run; every other command is escalated

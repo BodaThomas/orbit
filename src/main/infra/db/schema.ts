@@ -17,7 +17,7 @@ export const agents = sqliteTable(
     providerId: text('provider_id').notNull(),
     model: text('model').notNull(),
     instructions: text('instructions').notNull().default(''),
-    autonomy: text('autonomy', { enum: ['manual', 'supervised', 'automated'] }).notNull().default('supervised'),
+    autonomy: text('autonomy', { enum: ['manual', 'supervised', 'automated', 'autonomous'] }).notNull().default('supervised'),
     permissions: text('permissions', { mode: 'json' }).$type<AgentPermissions>().notNull(),
     workingDirectory: text('working_directory'),
     isolation: text('isolation').notNull().default('standard'),

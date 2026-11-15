@@ -199,7 +199,9 @@ export function createClaudeAgentEngine(opts: ClaudeEngineOptions): AgentEngine 
         canUseTool,
         hooks: { PreToolUse: [{ hooks: [preToolUse], timeout: 86_400, onFailure: 'block' }] },
         sandbox: {
-          enabled: true,
+          // Full delegation: the command sandbox would turn installs, pushes or global
+          // tooling into failures and retries. Orbit's gate and level-3 isolation still apply.
+          enabled: policy.autonomy !== 'autonomous',
           // When Orbit counts on the sandbox to auto-approve routine commands, no sandbox = no run.
           failIfUnavailable: policy.commandsContained === true,
           autoAllowBashIfSandboxed: false,

@@ -227,6 +227,15 @@ export class AgentRunner {
         recordAuto(ask.summary, 'grant', ask.payload.category ?? ask.tool.kind, `Autorisation ${grant.scope === 'always' ? 'permanente' : 'de mission'} : ${grant.label}`)
         return Promise.resolve(true)
       }
+      // Full delegation: a question that still reaches Orbit (an engine's own prompt, a remote
+      // daemon on an older policy) is answered here, never parked waiting for a human. Refusals
+      // of principle (Orbit's data, disabled permissions) are decided before and never get here.
+      if (agent.autonomy === 'autonomous') {
+        const toolCallId = ensureTool(ask.tool)
+        event('approval', `Autorisé automatiquement (autonomie complète) : ${ask.summary}`, { toolCallId })
+        recordAuto(ask.summary, 'policy', ask.payload.category ?? ask.tool.kind, `Autonomie complète : ${ask.payload.reason ?? ask.summary}`)
+        return Promise.resolve(true)
+      }
       const toolCallId = ensureTool(ask.tool)
       this.db.update(toolCalls).set({ status: 'awaiting_approval' }).where(eq(toolCalls.id, toolCallId)).run()
       pushTool(toolCallId)
@@ -289,7 +298,8 @@ export class AgentRunner {
             autonomy: agent.autonomy,
             isolation: agent.isolation,
             // Only what Orbit itself configures on this Mac counts as containment.
-            commandsContained: !job.remote && job.engine.capabilities.containsCommands === true,
+            // Autonomous companions run without the engine's command sandbox.
+            commandsContained: !job.remote && agent.autonomy !== 'autonomous' && job.engine.capabilities.containsCommands === true,
             protectedPaths: job.remote ? [] : this.protectedPaths,
           },
           secret: job.secret,
