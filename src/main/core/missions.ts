@@ -24,6 +24,15 @@ const OUTPUT_FLUSH_MS = 1200
  * Missions of a companion placed on a runtime are executed and owned by that
  * runtime. Orbit Desktop keeps a synced copy and turns every action into a command.
  */
+/** One execution of a mission has ended (with its own text, never a previous one). */
+export interface MissionSettled {
+  missionId: string
+  executionId: string
+  status: 'done' | 'failed' | 'cancelled'
+  text: string
+  followUp: boolean
+}
+
 export interface MissionRemote {
   submit(mission: Mission, origin: 'user' | 'automation', followUp?: string): void
   cancel(mission: Mission): void
@@ -68,6 +77,9 @@ export class MissionManager {
   /** Wording of « interrupted » after a restart (Orbit Desktop vs runtime). */
   interruptedNote = 'Interrompue : Orbit a été fermé pendant l’exécution. Vous pouvez poursuivre la mission, la session est conservée.'
   private idleWaiters = new Map<string, (() => void)[]>()
+  private settledListeners: ((e: MissionSettled) => void)[] = []
+  /** Constellations: may refuse a conversational follow-up (run being driven). Throws to refuse. */
+  followUpGuard: ((mission: Mission) => void) | null = null
 
   constructor(
     private db: OrbitDb,
@@ -223,6 +235,19 @@ export class MissionManager {
     })
   }
 
+  /** Called after every local execution ends, once its outcome is persisted. */
+  onSettled(listener: (e: MissionSettled) => void): () => void {
+    this.settledListeners.push(listener)
+    return () => {
+      this.settledListeners = this.settledListeners.filter((l) => l !== listener)
+    }
+  }
+
+  /** Number of executions a mission has had (0 = never started: safe to start again). */
+  executionCount(id: string): number {
+    return this.db.select({ n: count() }).from(missionExecutions).where(eq(missionExecutions.missionId, id)).get()?.n ?? 0
+  }
+
   /** Persists a parsed structured result (constellation sub-missions). */
   setResultData(id: string, data: StructuredResult | null): void {
     this.db.update(missions).set({ resultData: data, updatedAt: nowIso() }).where(eq(missions.id, id)).run()
@@ -324,6 +349,7 @@ export class MissionManager {
     if (!mission.engine && !mission.constellationRunId) throw new OrbitError('validation', 'Seules les missions confiées à un moteur agent (Claude Code, Claude Agent SDK, Codex) peuvent être poursuivies.')
     if (this.running.has(id)) throw new OrbitError('conflict', 'Le compagnon travaille encore sur cette mission.')
     if (mission.status === 'approval_required') throw new OrbitError('conflict', 'Répondez d’abord à la demande d’approbation en attente.')
+    this.followUpGuard?.(mission)
     if (mission.status !== 'todo') this.transition(mission, 'todo')
     return this.start(id, origin, prompt)
   }
@@ -522,9 +548,11 @@ export class MissionManager {
       this.running.delete(missionId)
     }
 
+    let settled: MissionSettled | null = { missionId, executionId, status: failure ? 'failed' : cancelled ? 'cancelled' : 'done', text, followUp: Boolean(followUp) }
     try {
       this.finish({ missionId, executionId, agent, mission, text, usage, failure, cancelled, followUp: Boolean(followUp) })
     } catch (err) {
+      settled = null
       // The mission may have been deleted while running.
       if (!(err instanceof OrbitError && err.code === 'not_found')) throw err
       this.agents.setStatus(agent.id, 'available', null)
@@ -532,6 +560,15 @@ export class MissionManager {
       this.bus.invalidate('missions', 'agents')
       for (const w of this.idleWaiters.get(missionId)?.splice(0) ?? []) w()
       this.idleWaiters.delete(missionId)
+      if (settled) {
+        for (const l of this.settledListeners) {
+          try {
+            l(settled)
+          } catch (err) {
+            this.journal.activity({ type: 'mission.failed', level: 'error', missionId, title: 'Erreur de suivi après la mission', detail: String(err) })
+          }
+        }
+      }
     }
   }
 
@@ -579,7 +616,9 @@ export class MissionManager {
       this.journal.notify('mission_failed', `Mission échouée · ${agent.name}`, o.failure, `/missions/${missionId}`)
     } else {
       this.transition(fresh, 'done', { finishedAt: nowIso(), result, ...costPatch })
-      this.event(missionId, executionId, 'completed', 'Mission terminée.')
+      // In a constellation the end of one reply is not the end of the collective mission.
+      const ended = !mission.constellationRunId ? 'Mission terminée.' : mission.depth > 0 ? 'Sous-mission terminée.' : 'Échange avec le coordinateur terminé (la mission collective continue de son côté).'
+      this.event(missionId, executionId, 'completed', ended)
       this.agents.setStatus(agent.id, 'done', mission.title)
       setTimeout(() => {
         try {
@@ -589,7 +628,8 @@ export class MissionManager {
         }
       }, 8000).unref?.()
       this.journal.activity({ type: 'mission.completed', level: 'success', agentId: agent.id, missionId, title: `${agent.name} a terminé une mission`, detail: mission.title })
-      this.journal.notify('mission_done', `${agent.name} a terminé`, mission.title, `/missions/${missionId}`)
+      // A constellation notifies for itself when the whole run completes.
+      if (!mission.constellationRunId) this.journal.notify('mission_done', `${agent.name} a terminé`, mission.title, `/missions/${missionId}`)
     }
   }
 

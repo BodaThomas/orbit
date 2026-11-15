@@ -718,11 +718,88 @@ export interface ConstellationDefinition {
   permissions: AgentPermissions
   limits: ConstellationLimits
   isTemplate: boolean
+  /** When a coordinator's plan waits for the user's explicit approval. */
+  planApproval: PlanApprovalPolicy
   createdAt: string
   updatedAt: string
 }
 
-export type ConstellationRunStatus = 'planning' | 'running' | 'synthesizing' | 'done' | 'failed' | 'cancelled' | 'interrupted'
+/** auto: plans run once Orbit validated them; writes: approval when a task can modify; always. */
+export type PlanApprovalPolicy = 'auto' | 'writes' | 'always'
+
+/**
+ * Lifecycle of a constellation run. The run - not its coordinator - owns it: the end of a
+ * coordinator reply never completes the run by itself.
+ * `synthesizing` is the active sub-state where the coordinator writes the round's synthesis.
+ */
+export type ConstellationRunStatus =
+  | 'planning'
+  | 'awaiting_approval'
+  | 'ready'
+  | 'running'
+  | 'synthesizing'
+  | 'paused'
+  | 'blocked'
+  | 'failed'
+  | 'completed'
+  | 'cancelled'
+
+
+/** One task of a plan as Orbit stored it (agent resolved). */
+export interface PlanTaskRecord {
+  id: string
+  assignee: string
+  agentId: string
+  objective: string
+  expected: string
+  context: string
+  dependsOn: string[]
+  readOnly: boolean
+}
+
+export interface PlanDiff {
+  added: string[]
+  removed: string[]
+  changed: string[]
+  unchanged: string[]
+  /** Already finished: never re-run, even if the new plan changes them. */
+  keptDone: string[]
+}
+
+export interface ConstellationPlan {
+  id: string
+  runId: string
+  version: number
+  round: number
+  status: 'proposed' | 'approved' | 'rejected' | 'superseded' | 'invalid'
+  hash: string
+  tasks: PlanTaskRecord[]
+  /** Decisions the coordinator asks the user to take. */
+  questions: string[]
+  note: string | null
+  errors: string[]
+  source: 'coordinator' | 'conversation' | 'user'
+  sourceExecutionId: string | null
+  approvalReason: string | null
+  createdAt: string
+  decidedAt: string | null
+  decidedBy: string | null
+  /** Against the previous approved plan (null for the first one). */
+  diff: PlanDiff | null
+}
+
+export interface ConstellationRunEvent {
+  id: string
+  runId: string
+  kind: string
+  level: 'info' | 'success' | 'warning' | 'error'
+  message: string
+  data: Record<string, unknown> | null
+  actor: string
+  createdAt: string
+}
+
+export type ConstellationRunAction = 'resume' | 'retry' | 'edit_plan' | 'pause' | 'cancel' | 'approve' | 'reject' | 'answer' | 'raise_limits' | 'continue'
 
 export interface SubtaskSpec {
   key: string
@@ -781,6 +858,9 @@ export interface ConstellationRun {
   finishedAt: string | null
   /** Coordinated by this runtime machine (synced copy). */
   machineId: string | null
+  /** Inside an active status: planning, executing or synthesizing. */
+  phase: string | null
+  activeMs: number
 }
 
 export interface ExecutionHandoff {
@@ -816,6 +896,17 @@ export interface ConstellationRunDetail {
   tasks: ConstellationTask[]
   handoffs: ExecutionHandoff[]
   workspaces: AgentWorkspace[]
+  plans: ConstellationPlan[]
+  events: ConstellationRunEvent[]
+  /** The plan waiting for the user's decision, if any. */
+  pendingPlan: ConstellationPlan | null
+  /** Actions that make sense now (state + engine capabilities). */
+  actions: ConstellationRunAction[]
+  /** Is the drive loop alive in this process (false after a restart until resumed). */
+  driving: boolean
+  progress: { total: number; done: number; running: number; remaining: number; failed: number; blocked: number; awaitingApproval: number }
+  /** Failed or interrupted tasks: what they had already changed (to check before a retry). */
+  retryable: { missionId: string; key: string; executions: number; fileChanges: number; canWrite: boolean; interrupted: boolean }[]
 }
 
 /** Pushed when something real travels along a link (drives the light pulse in the UI). */

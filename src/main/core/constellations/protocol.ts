@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
-import type { Agent, AgentPermissions, ConstellationDefinition, ConstellationLimits, StructuredResult, SubtaskSpec } from '@shared/types'
+import type { Agent, AgentPermissions, ConstellationDefinition, ConstellationLimits, PlanDiff, PlanTaskRecord, StructuredResult, SubtaskSpec } from '@shared/types'
 import { redactSecrets } from '../security/sensitive'
 
 /**
@@ -20,15 +21,34 @@ const taskSchema = z.object({
   dependsOn: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
   readOnly: z.boolean().default(false),
 })
-const planSchema = z.object({ tasks: z.array(taskSchema).max(50), note: z.string().max(2000).optional() })
+const planSchema = z.object({
+  tasks: z.array(taskSchema).max(50).default([]),
+  note: z.string().max(2000).optional(),
+  /** The coordinator wants the user to validate these tasks before they start. */
+  requestApproval: z.boolean().default(false),
+  /** Decisions the user must take before the work can continue. */
+  questions: z.array(z.string().trim().min(1).max(1000)).max(20).default([]),
+})
 
 export type PlanTask = z.infer<typeof taskSchema>
 
 export interface PlanValidation {
   tasks: (PlanTask & { agentId: string })[]
   errors: string[]
-  /** true when the coordinator chose to answer alone (empty task list or no block). */
+  /** true when the coordinator chose to answer alone (empty task list, no question, or no block). */
   noDelegation: boolean
+  /** A block was present (even invalid): never silently ignored. */
+  blockFound: boolean
+  requestApproval: boolean
+  questions: string[]
+  note: string | null
+}
+
+/** Existing task of the run, as the validator needs it. */
+export interface ExistingTask {
+  key: string
+  agentId: string
+  status: string
 }
 
 /** Last fenced ```orbit-plan block (or <orbit-plan>…</orbit-plan>) of a message. */
@@ -58,22 +78,40 @@ export function findCycle(nodes: { id: string; dependsOn: string[] }[]): string[
   return nodes.map((n) => n.id).filter((id) => !seen.has(id))
 }
 
+/**
+ * Validates the coordinator's plan against the run. Keys already present in the run are
+ * allowed: they designate the same task (an identical plan re-sent, or a revision) and are
+ * reconciled, never duplicated. `limits` are the run's (the user may have raised them).
+ */
 export function validatePlan(
   text: string,
-  ctx: { definition: Pick<ConstellationDefinition, 'coordinatorAgentId' | 'members' | 'limits'>; agents: Pick<Agent, 'id' | 'name' | 'enabled'>[]; alreadyCreated: number; existingKeys: string[]; coordinatorCanDelegate: boolean },
+  ctx: {
+    definition: Pick<ConstellationDefinition, 'coordinatorAgentId' | 'members'> & { limits: Pick<ConstellationLimits, 'maxSubtasks'> }
+    agents: Pick<Agent, 'id' | 'name' | 'enabled'>[]
+    /** Legacy callers: count and keys only. */
+    alreadyCreated?: number
+    existingKeys?: string[]
+    existing?: ExistingTask[]
+    coordinatorCanDelegate: boolean
+  },
 ): PlanValidation {
+  const base = { tasks: [], requestApproval: false, questions: [] as string[], note: null }
   const block = extractBlock(text, 'orbit-plan')
-  if (block == null) return { tasks: [], errors: [], noDelegation: true }
+  if (block == null) return { ...base, errors: [], noDelegation: true, blockFound: false }
   let json: unknown
   try {
     json = JSON.parse(block)
-  } catch {
-    return { tasks: [], errors: ['Le plan n’est pas un JSON valide.'], noDelegation: false }
+  } catch (err) {
+    return { ...base, errors: [`Le bloc orbit-plan n’est pas un JSON valide (${err instanceof Error ? err.message.slice(0, 160) : 'erreur de syntaxe'}).`], noDelegation: false, blockFound: true }
   }
   const parsed = planSchema.safeParse(json)
-  if (!parsed.success) return { tasks: [], errors: [`Plan invalide : ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join(' ; ')}`], noDelegation: false }
-  if (parsed.data.tasks.length === 0) return { tasks: [], errors: [], noDelegation: true }
-  if (!ctx.coordinatorCanDelegate) return { tasks: [], errors: ['Ce coordinateur n’est pas autorisé à déléguer.'], noDelegation: false }
+  if (!parsed.success) return { ...base, errors: [`Plan invalide : ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join(' ; ')}`], noDelegation: false, blockFound: true }
+  const meta = { requestApproval: parsed.data.requestApproval, questions: parsed.data.questions, note: parsed.data.note ?? null, blockFound: true }
+  if (parsed.data.tasks.length === 0) return { ...base, ...meta, errors: [], noDelegation: parsed.data.questions.length === 0 && !parsed.data.requestApproval }
+  if (!ctx.coordinatorCanDelegate) return { ...base, ...meta, errors: ['Ce coordinateur n’est pas autorisé à déléguer.'], noDelegation: false }
+  const existing: ExistingTask[] = ctx.existing ?? []
+  const existingKeys = new Set(existing.map((e) => e.key))
+  const legacyKeys = ctx.existing ? [] : (ctx.existingKeys ?? [])
 
   const errors: string[] = []
   const members = new Map(ctx.definition.members.map((m) => [m.agentId, m]))
@@ -82,7 +120,7 @@ export function validatePlan(
   const keys = new Set<string>()
   const tasks: (PlanTask & { agentId: string })[] = []
   for (const t of parsed.data.tasks) {
-    if (keys.has(t.id) || ctx.existingKeys.includes(t.id)) {
+    if (keys.has(t.id) || legacyKeys.includes(t.id)) {
       errors.push(`Identifiant en double : ${t.id}.`)
       continue
     }
@@ -106,12 +144,42 @@ export function validatePlan(
     }
     tasks.push({ ...t, agentId: agent.id })
   }
-  const known = new Set([...keys, ...ctx.existingKeys])
-  for (const t of tasks) for (const d of t.dependsOn) if (!known.has(d)) errors.push(`${t.id} dépend de « ${d} », inconnu.`)
+  const known = new Set([...keys, ...legacyKeys, ...existingKeys])
+  for (const t of tasks) {
+    if (t.dependsOn.includes(t.id)) errors.push(`${t.id} dépend de lui-même.`)
+    for (const d of t.dependsOn) if (!known.has(d)) errors.push(`${t.id} dépend de « ${d} », inconnu.`)
+  }
   const cycle = findCycle(tasks.map((t) => ({ id: t.id, dependsOn: t.dependsOn.filter((d) => keys.has(d)) })))
   if (cycle.length) errors.push(`Dépendances circulaires : ${cycle.join(' → ')}.`)
-  if (ctx.alreadyCreated + tasks.length > ctx.definition.limits.maxSubtasks) errors.push(`Trop de sous-missions : ${ctx.alreadyCreated + tasks.length} demandées au total, limite ${ctx.definition.limits.maxSubtasks}.`)
-  return { tasks: errors.length ? [] : tasks, errors, noDelegation: false }
+  const total = ctx.existing ? new Set([...existingKeys, ...keys]).size : (ctx.alreadyCreated ?? 0) + tasks.length
+  if (total > ctx.definition.limits.maxSubtasks) errors.push(`Trop de sous-missions : ${total} au total pour cette exécution, limite ${ctx.definition.limits.maxSubtasks}.`)
+  return { ...meta, tasks: errors.length ? [] : tasks, errors, noDelegation: false }
+}
+
+/** Stable identity of a plan: same tasks (resolved companion, content, dependencies) → same hash. */
+export function planHash(tasks: Pick<PlanTaskRecord, 'id' | 'agentId' | 'objective' | 'expected' | 'context' | 'dependsOn' | 'readOnly'>[], questions: string[] = []): string {
+  const canon = [...tasks]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((t) => [t.id, t.agentId, t.objective.trim(), t.expected.trim(), t.context.trim(), [...t.dependsOn].sort(), t.readOnly])
+  return createHash('sha256').update(JSON.stringify([canon, questions.map((q) => q.trim())])).digest('hex').slice(0, 32)
+}
+
+const sameTask = (a: PlanTaskRecord, b: PlanTaskRecord) => planHash([a]) === planHash([b])
+
+/** What a new plan changes compared with the previous approved one. */
+export function diffPlans(prev: PlanTaskRecord[] | null, next: PlanTaskRecord[], done: Set<string>): PlanDiff {
+  const before = new Map((prev ?? []).map((t) => [t.id, t]))
+  const diff: PlanDiff = { added: [], removed: [], changed: [], unchanged: [], keptDone: [] }
+  for (const t of next) {
+    const p = before.get(t.id)
+    if (done.has(t.id) && (!p || !sameTask(p, t))) diff.keptDone.push(t.id)
+    else if (!p) diff.added.push(t.id)
+    else if (sameTask(p, t)) diff.unchanged.push(t.id)
+    else diff.changed.push(t.id)
+  }
+  // Finished tasks of an earlier round are history, not removals.
+  for (const id of before.keys()) if (!next.some((t) => t.id === id) && !done.has(id)) diff.removed.push(id)
+  return diff
 }
 
 const resultSchema = z.object({ status: z.enum(['done', 'partial', 'blocked']).default('done'), summary: z.string().max(8000).default(''), files: z.array(z.string().max(1024)).max(200).default([]) })
@@ -156,7 +224,8 @@ export function planningPrompt(o: { goal: string; definition: ConstellationDefin
     '```orbit-plan\n{"tasks":[{"id":"recherche","assignee":"<nom du membre>","objective":"…","expected":"résultat attendu","context":"informations utiles à transmettre","dependsOn":[],"readOnly":true}]}\n```',
     `Règles : au plus ${o.limits.maxSubtasks} sous-missions au total, ${o.limits.maxParallel} en parallèle ; « dependsOn » liste les id dont le résultat est nécessaire ; « readOnly »: true si la sous-mission ne doit rien modifier. Tu ne peux pas t’assigner de tâche. Ne transmets jamais de secret, mot de passe ou clé dans « context ».`,
     `Si la demande ne nécessite pas de délégation, réponds directement et termine par \`\`\`orbit-plan\n{"tasks":[]}\n\`\`\`.`,
-    `Orbit vérifiera ton plan, lancera les sous-missions, puis te renverra leurs résultats pour la synthèse.`,
+    PLAN_CONTROL,
+    `Orbit vérifiera ton plan, lancera lui-même les sous-missions, puis te renverra leurs résultats pour la synthèse.`,
   ]
     .filter(Boolean)
     .join('\n\n')
@@ -206,11 +275,36 @@ export function synthesisPrompt(o: { results: { key: string; agentName: string; 
       `# Résultats des sous-missions (tour ${o.round})`,
       body,
       o.canDelegateAgain
-        ? `Fais la synthèse pour l’utilisateur. Si un complément est indispensable, tu peux déléguer encore (au plus ${o.remaining} sous-missions) avec un nouveau bloc \`orbit-plan\` ; sinon termine par \`\`\`orbit-plan\n{"tasks":[]}\n\`\`\`.`
+        ? `Fais la synthèse pour l’utilisateur. Si un complément est indispensable, tu peux déléguer encore (au plus ${o.remaining} sous-missions) avec un nouveau bloc \`orbit-plan\` ; sinon termine par \`\`\`orbit-plan\n{"tasks":[]}\n\`\`\`.\n\n${PLAN_CONTROL}`
         : `Rédige maintenant la synthèse finale pour l’utilisateur (aucune nouvelle délégation possible) : ce qui a été fait, par qui, les résultats, les points à vérifier et les prochaines étapes.`,
     ].join('\n\n'),
     redactions,
   }
+}
+
+/** How the coordinator asks for a decision instead of ending the run. */
+export const PLAN_CONTROL = [
+  `Validation humaine : si l’utilisateur doit valider des sous-missions avant leur démarrage, ajoute \`"requestApproval": true\` au bloc (elles ne démarreront qu’après son accord explicite). Si tu as besoin de décisions avant de pouvoir planifier, termine par \`{"tasks":[],"questions":["décision 1","décision 2"]}\` : la mission collective reste ouverte et la réponse de l’utilisateur te sera transmise.`,
+  `Tu ne lances jamais les sous-missions toi-même : c’est Orbit qui le fait dès que le plan est validé. Un bloc \`{"tasks":[]}\` sans question signifie que la mission collective est terminée.`,
+].join('\n')
+
+/** A user's structured answer or instruction, handed back to the coordinator. */
+export function continuationPrompt(o: { kind: 'answer' | 'rejected' | 'continue' | 'resume'; text: string; questions?: string[]; remaining: number; round: number }): string {
+  const head = {
+    answer: `# Réponse de l’utilisateur à tes questions`,
+    rejected: `# L’utilisateur n’a pas validé ton plan`,
+    continue: `# Nouvelle consigne de l’utilisateur pour la mission collective`,
+    resume: `# Reprise de la mission collective`,
+  }[o.kind]
+  return [
+    head,
+    o.questions?.length ? `Tes questions :\n${o.questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}` : '',
+    o.text ? `Réponse / consigne :\n${o.text}` : '',
+    `Poursuis la coordination (tour ${o.round}). Il reste au plus ${o.remaining} sous-missions possibles. Termine par ton bloc \`orbit-plan\`.`,
+    PLAN_CONTROL,
+  ]
+    .filter(Boolean)
+    .join('\n\n')
 }
 
 /** The synthesis shown to the user, without the protocol block. */

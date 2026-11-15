@@ -188,8 +188,10 @@ export class RemoteMirror {
     if (table === 'approval_requests' && row.status === 'pending' && !before) {
       res.notices.push({ kind: 'approval', title: `Accord demandé sur ${machine}`, body: String(row.summary).slice(0, 200), route: row.mission_id ? `/missions/${String(row.mission_id)}` : '/', dedupeKey: `remote:approval:${String(row.id)}` })
     }
-    if (table === 'constellation_runs' && changed('status') && ['done', 'failed'].includes(String(row.status))) {
-      res.notices.push({ kind: row.status === 'done' ? 'mission_done' : 'mission_failed', title: row.status === 'done' ? `Constellation terminée sur ${machine}` : `Constellation en échec sur ${machine}`, body: String(row.status === 'done' ? row.goal : (row.error ?? row.goal)).slice(0, 200), route: `/constellations/runs/${String(row.id)}`, dedupeKey: `remote:run:${String(row.id)}:${String(row.status)}` })
+    // `done` comes from runtimes older than the run lifecycle (now `completed`).
+    const runDone = row.status === 'done' || row.status === 'completed'
+    if (table === 'constellation_runs' && changed('status') && (runDone || row.status === 'failed')) {
+      res.notices.push({ kind: runDone ? 'mission_done' : 'mission_failed', title: runDone ? `Constellation terminée sur ${machine}` : `Constellation en échec sur ${machine}`, body: String(runDone ? row.goal : (row.error ?? row.goal)).slice(0, 200), route: `/constellations/runs/${String(row.id)}`, dedupeKey: `remote:run:${String(row.id)}:${String(row.status)}` })
     }
     if (table === 'automation_runs' && changed('status') && row.status === 'pending_confirmation') {
       res.notices.push({ kind: 'approval', title: `Exécution manquée sur ${machine}`, body: String(row.note ?? 'Confirmez ou ignorez cette exécution.').slice(0, 200), route: `/automations?run=${String(row.id)}`, dedupeKey: `remote:autorun:${String(row.id)}:confirm` })

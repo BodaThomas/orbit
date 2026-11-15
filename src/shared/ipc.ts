@@ -28,6 +28,7 @@ import type {
   ConstellationDefinition,
   ConstellationRun,
   ConstellationRunDetail,
+  ConstellationPlan,
   AgentWorkspace,
   Automation,
   RemoteMachine,
@@ -120,6 +121,17 @@ export const constellationInputSchema = z.object({
   permissions: permissionsSchema,
   limits: limitsSchema,
   isTemplate: z.boolean(),
+  planApproval: z.enum(['auto', 'writes', 'always']).optional(),
+})
+
+export const planTaskInputSchema = z.object({
+  id: z.string().trim().min(1).max(40),
+  assignee: z.string().trim().min(1).max(80),
+  objective: z.string().trim().min(1).max(4000),
+  expected: z.string().max(2000).optional(),
+  context: z.string().max(8000).optional(),
+  dependsOn: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
+  readOnly: z.boolean().optional(),
 })
 
 export const recurrenceSchema = z.discriminatedUnion('kind', [
@@ -234,7 +246,15 @@ export const ipcSchemas = {
   'constellations.runs': z.object({ constellationId: id.optional() }),
   'constellations.run': z.object({ id }),
   'constellations.cancel': z.object({ id }),
-  'constellations.resume': z.object({ id }),
+  'constellations.resume': z.object({ id, skipFailed: z.boolean().optional() }),
+  'constellations.pause': z.object({ id }),
+  'constellations.approvePlan': z.object({ id, planId: id, hash: z.string().max(64).optional() }),
+  'constellations.rejectPlan': z.object({ id, planId: id, feedback: z.string().max(8000) }),
+  'constellations.answer': z.object({ id, text: z.string().trim().min(1).max(8000) }),
+  'constellations.retry': z.object({ id, missionIds: z.array(id).min(1).max(50) }),
+  'constellations.editPlan': z.object({ id, tasks: z.array(planTaskInputSchema).min(1).max(50) }),
+  'constellations.updateLimits': z.object({ id, limits: limitsSchema.partial() }),
+  'constellations.unfinished': z.void(),
   'constellations.workspaceDiff': z.object({ id }),
   'constellations.mergeWorkspace': z.object({ id }),
   'constellations.discardWorkspace': z.object({ id }),
@@ -354,6 +374,14 @@ export interface IpcOutputs {
   'constellations.run': ConstellationRunDetail
   'constellations.cancel': ConstellationRun
   'constellations.resume': ConstellationRun
+  'constellations.pause': ConstellationRun
+  'constellations.approvePlan': ConstellationRun
+  'constellations.rejectPlan': ConstellationRun
+  'constellations.answer': ConstellationRun
+  'constellations.retry': ConstellationRun
+  'constellations.editPlan': ConstellationPlan
+  'constellations.updateLimits': ConstellationRun
+  'constellations.unfinished': ConstellationRun[]
   'constellations.workspaceDiff': string
   'constellations.mergeWorkspace': AgentWorkspace
   'constellations.discardWorkspace': AgentWorkspace

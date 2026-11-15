@@ -474,8 +474,9 @@ export class Scheduler {
       }
       if (r.constellationRunId) {
         const run = this.constellations.run(r.constellationRunId)
-        if (['planning', 'running', 'synthesizing'].includes(run.status)) return null
-        return { status: run.status === 'done' ? 'done' : run.status === 'cancelled' ? 'cancelled' : run.status === 'interrupted' ? 'uncertain' : 'failed', note: run.error }
+        // Still working, or waiting for the user's decision: not settled yet.
+        if (['planning', 'ready', 'running', 'synthesizing', 'awaiting_approval'].includes(run.status)) return null
+        return { status: run.status === 'completed' ? 'done' : run.status === 'cancelled' ? 'cancelled' : run.status === 'paused' ? 'uncertain' : 'failed', note: run.error }
       }
     } catch {
       return { status: 'cancelled', note: 'Cible supprimée.' }
