@@ -237,6 +237,7 @@ export function planningPrompt(o: { goal: string; definition: ConstellationDefin
     '```orbit-plan\n{"tasks":[{"id":"recherche","assignee":"<nom du membre>","objective":"…","expected":"résultat attendu","context":"informations utiles à transmettre","dependsOn":[],"readOnly":true}]}\n```',
     `Règles : au plus ${o.limits.maxSubtasks} sous-missions au total, ${o.limits.maxParallel} en parallèle ; « dependsOn » liste les id dont le résultat est nécessaire ; « readOnly »: true si la sous-mission ne doit rien modifier. Tu ne peux pas t’assigner de tâche. Ne transmets jamais de secret, mot de passe ou clé dans « context ».`,
     `Si la demande ne nécessite pas de délégation, réponds directement et termine par \`\`\`orbit-plan\n{"tasks":[]}\n\`\`\`.`,
+    PARALLEL_RULES,
     PLAN_CONTROL,
     `Orbit vérifiera ton plan, lancera lui-même les sous-missions, puis te renverra leurs résultats pour la synthèse.`,
   ]
@@ -293,7 +294,7 @@ export function synthesisPrompt(o: { results: { key: string; agentName: string; 
       `# Résultats des sous-missions (tour ${o.round})`,
       body,
       o.canDelegateAgain
-        ? `Fais la synthèse pour l’utilisateur. Si un complément est indispensable, tu peux déléguer encore (au plus ${o.remaining} sous-missions) avec un nouveau bloc \`orbit-plan\` ; sinon termine par \`\`\`orbit-plan\n{"tasks":[]}\n\`\`\`.\n\n${PLAN_CONTROL}`
+        ? `Fais la synthèse pour l’utilisateur. Si un complément est indispensable, tu peux déléguer encore (au plus ${o.remaining} sous-missions) avec un nouveau bloc \`orbit-plan\` ; sinon termine par \`\`\`orbit-plan\n{"tasks":[]}\n\`\`\`.\n\n${PARALLEL_RULES}\n\n${PLAN_CONTROL}`
         : `Rédige maintenant la synthèse finale pour l’utilisateur (aucune nouvelle délégation possible) : ce qui a été fait, par qui, les résultats, les points à vérifier et les prochaines étapes.`,
       o.canDelegateAgain ? usedIdsLine(o.usedIds) : '',
     ]
@@ -302,6 +303,17 @@ export function synthesisPrompt(o: { results: { key: string; agentName: string; 
     redactions,
   }
 }
+
+/**
+ * Sub-missions that write to the same folder run one after the other, read-only ones run
+ * side by side: the plan's shape decides the wall time more than any single task.
+ */
+export const PARALLEL_RULES = [
+  `Parallélisme : tout ce qui n’a pas besoin d’un résultat précédent démarre en même temps, à condition de ne pas écrire au même endroit.`,
+  `- Une revue, un audit, une vérification ou une recherche qui ne livre qu’un compte rendu : « readOnly »: true (le compte rendu revient dans son résultat). Attention, en lecture seule le membre ne peut ni modifier de fichier ni lancer de commande.`,
+  `- Une sous-mission qui modifie des fichiers attend que les autres rédacteurs du même dossier aient fini : ne lui confie que ce qui exige vraiment d’écrire.`,
+  `- Ne mets dans « dependsOn » que ce dont la sous-mission a réellement besoin. Évite les chaînes revue → correction → contre-vérification à chaque tour : regroupe les corrections et ne prévois une contre-vérification que si un risque réel le justifie.`,
+].join('\n')
 
 /** How the coordinator asks for a decision instead of ending the run. */
 export const PLAN_CONTROL = [
@@ -323,6 +335,7 @@ export function continuationPrompt(o: { kind: 'answer' | 'rejected' | 'continue'
     o.text ? `Réponse / consigne :\n${o.text}` : '',
     `Poursuis la coordination (tour ${o.round}). Il reste au plus ${o.remaining} sous-missions possibles. Termine par ton bloc \`orbit-plan\`.`,
     usedIdsLine(o.usedIds),
+    PARALLEL_RULES,
     PLAN_CONTROL,
   ]
     .filter(Boolean)
