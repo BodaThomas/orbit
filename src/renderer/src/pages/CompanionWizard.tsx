@@ -7,7 +7,7 @@ import type { AgentInput } from '@shared/ipc'
 import type { AgentPermissions, Appearance, AutonomyLevel, PaletteId, ProviderInfo } from '@shared/types'
 import { Page, PageLoading } from '@/components/shell/Page'
 import { Button } from '@/components/ui/button'
-import { Badge, Input, Label, Switch, Textarea } from '@/components/ui/field'
+import { AdvancedSection, Badge, Input, Label, Switch, Textarea } from '@/components/ui/field'
 import { call } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { useAction, useAgent, useProviders, useRemoteMachines, useSecurity } from '@/lib/queries'
@@ -21,8 +21,7 @@ import { navigate } from '@/stores/router'
 
 const STEPS = [
   { key: 'identity', label: 'Identité' },
-  { key: 'look', label: 'Personnage' },
-  { key: 'planet', label: 'Planète' },
+  { key: 'look', label: 'Apparence' },
   { key: 'mind', label: 'Moteur' },
   { key: 'frame', label: 'Cadre' },
 ] as const
@@ -292,8 +291,8 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
             </div>
           )}
 
-          {step === 2 && (
-            <div className="space-y-6">
+          {step === 1 && (
+            <div className="mt-6 space-y-6 border-t border-line pt-6">
               <div>
                 <Label>Couleur de la planète</Label>
                 <div className="flex flex-wrap items-center gap-3 px-1">
@@ -344,7 +343,7 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
             </div>
           )}
 
-          {step === 3 && (
+          {step === 2 && (
             <div className="space-y-5">
               <div>
                 <Label>Moteur</Label>
@@ -407,33 +406,35 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
                   <Input value={draft.model} onChange={(e) => set('model', e.target.value)} placeholder="identifiant-du-modèle" />
                 )}
               </div>
-              {isAgentEngine(draft.providerId) && (
-                <div>
-                  <Label hint="Plus d’effort : réponses plus réfléchies, plus de jetons">Effort de raisonnement</Label>
-                  <div className="flex flex-wrap gap-1.5">
-                    {[{ id: null, label: 'Par défaut' }, ...EFFORT_LEVELS].map((e) => (
-                      <button
-                        key={e.id ?? 'default'}
-                        type="button"
-                        aria-pressed={draft.effort === e.id}
-                        onClick={() => set('effort', e.id as AgentInput['effort'])}
-                        className={cn('h-8 rounded-[9px] px-3 text-[12.5px]', draft.effort === e.id ? 'bg-accent/[0.09] text-fg shadow-[inset_0_0_0_1.5px_rgb(165_155_250/0.6)]' : 'bg-white/[0.025] text-fg-2 shadow-[inset_0_0_0_1px_var(--color-line)] hover:bg-white/[0.05]')}
-                      >
-                        {e.label}
-                      </button>
-                    ))}
-                  </div>
-                  <p className="mt-1.5 text-2xs text-fg-4">Transmis tel quel au moteur. Si le modèle ne le prend pas en charge, la mission échoue avec un message clair : aucun repli silencieux.</p>
-                </div>
-              )}
               <div>
                 <Label hint="Envoyées à chaque échange">Instructions permanentes</Label>
                 <Textarea className="min-h-36" value={draft.instructions} onChange={(e) => set('instructions', e.target.value)} placeholder={`Tu es ${draft.name || 'un compagnon'}…`} />
               </div>
+              {isAgentEngine(draft.providerId) && (
+                <AdvancedSection>
+                  <div>
+                    <Label hint="Plus d’effort : réponses plus réfléchies, mais plus lentes et plus chères">Effort de raisonnement</Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[{ id: null, label: 'Par défaut' }, ...EFFORT_LEVELS].map((e) => (
+                        <button
+                          key={e.id ?? 'default'}
+                          type="button"
+                          aria-pressed={draft.effort === e.id}
+                          onClick={() => set('effort', e.id as AgentInput['effort'])}
+                          className={cn('h-8 rounded-[9px] px-3 text-[12.5px]', draft.effort === e.id ? 'bg-accent/[0.09] text-fg shadow-[inset_0_0_0_1.5px_rgb(165_155_250/0.6)]' : 'bg-white/[0.025] text-fg-2 shadow-[inset_0_0_0_1px_var(--color-line)] hover:bg-white/[0.05]')}
+                        >
+                          {e.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="mt-1.5 text-2xs text-fg-4">Transmis tel quel au moteur. Si le modèle ne le prend pas en charge, la mission échoue avec un message clair : aucun repli silencieux.</p>
+                  </div>
+                </AdvancedSection>
+              )}
             </div>
           )}
 
-          {step === 4 && (
+          {step === 3 && (
             <div className="space-y-6">
               <div>
                 <Label>Niveau d’autonomie</Label>
@@ -520,20 +521,24 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
                 </div>
               </div>
               {isAgentEngine(draft.providerId) && (
-                <div>
-                  <Label hint="Niveau 3 · bloque les lectures hors du projet">Isolation renforcée</Label>
-                  <div className="flex items-start gap-3 rounded-[11px] bg-white/[0.025] px-3.5 py-3 shadow-[inset_0_0_0_1px_var(--color-line)]">
-                    <ShieldCheck className={cn('mt-0.5 size-4', draft.isolation === 'strict' ? 'text-success' : 'text-fg-3')} />
-                    <span className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-fg-3">
-                      <span className="block text-[13px] text-fg">Confiner tout le moteur au dossier du projet</span>
-                      Le noyau macOS refuse à {draft.name || 'ce compagnon'} et à toutes ses commandes la lecture de votre dossier personnel hors du projet (clés SSH, .env d’autres projets…).
-                      {security.data && !security.data.isolation.ok && <span className="mt-1 block text-warning">Indisponible : l’auto-test de confinement n’a pas réussi sur ce Mac.</span>}
-                      {security.data?.isolation.ok && <span className="mt-1 block text-fg-4">Auto-test réussi le {new Date(security.data.isolation.checkedAt!).toLocaleString('fr-FR')}. Le dossier de connexion du moteur reste lisible.</span>}
-                    </span>
-                    <Switch checked={draft.isolation === 'strict'} disabled={!security.data?.isolation.ok} onChange={(v) => set('isolation', v ? 'strict' : 'standard')} label="Isolation renforcée" />
+                <AdvancedSection>
+                  <div>
+                    <Label hint="Bloque les lectures hors du projet">Isolation renforcée</Label>
+                    <div className="flex items-start gap-3 rounded-[11px] bg-white/[0.025] px-3.5 py-3 shadow-[inset_0_0_0_1px_var(--color-line)]">
+                      <ShieldCheck className={cn('mt-0.5 size-4', draft.isolation === 'strict' ? 'text-success' : 'text-fg-3')} />
+                      <span className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-fg-3">
+                        <span className="block text-[13px] text-fg">Confiner tout le moteur au dossier du projet</span>
+                        Le noyau macOS refuse à {draft.name || 'ce compagnon'} et à toutes ses commandes la lecture de votre dossier personnel hors du projet (clés SSH, .env d’autres projets…).
+                        {security.data && !security.data.isolation.ok && <span className="mt-1 block text-warning">Indisponible : l’auto-test de confinement n’a pas réussi sur ce Mac.</span>}
+                        {security.data?.isolation.ok && <span className="mt-1 block text-fg-4">Auto-test réussi le {new Date(security.data.isolation.checkedAt!).toLocaleString('fr-FR')}. Le dossier de connexion du moteur reste lisible.</span>}
+                      </span>
+                      <Switch checked={draft.isolation === 'strict'} disabled={!security.data?.isolation.ok} onChange={(v) => set('isolation', v ? 'strict' : 'standard')} label="Isolation renforcée" />
+                    </div>
                   </div>
-                </div>
+                </AdvancedSection>
               )}
+              {/* Choosing where to run only makes sense once a machine is connected. */}
+              {(remoteMachines.data?.length || draft.runtime === 'remote') ? (
               <div>
                 <Label hint={isAgentEngine(draft.providerId) ? 'Une machine distante travaille même Mac éteint' : 'Moteurs agents uniquement'}>Environnement d’exécution</Label>
                 <div className="grid grid-cols-2 gap-2">
@@ -568,6 +573,7 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
                   </div>
                 )}
               </div>
+              ) : null}
             </div>
           )}
 

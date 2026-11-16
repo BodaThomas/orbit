@@ -4,7 +4,7 @@ import { describeRecurrence, localDateTimeInput, type Recurrence } from '@shared
 import type { Agent, Automation, AutomationRun, ConstellationDefinition, MissedPolicy, RemoteMachine } from '@shared/types'
 import { Page, PageHeader, PageLoading, Panel } from '@/components/shell/Page'
 import { Button } from '@/components/ui/button'
-import { Badge, Input, Label, Segmented, Skeleton, Switch, Textarea } from '@/components/ui/field'
+import { AdvancedSection, Badge, Input, Label, Segmented, Skeleton, Switch, Textarea } from '@/components/ui/field'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, Tooltip } from '@/components/ui/overlay'
 import { call } from '@/lib/api'
 import { cn } from '@/lib/cn'
@@ -489,14 +489,23 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
     return <PageLoading />
   }
 
-  const section = (n: number, label: string, children: React.ReactNode) => (
+  // Steps are numbered as they render, since « Où » only shows once a machine exists.
+  let shown = 0
+  const section = (_n: number, label: string, children: React.ReactNode) => (
     <section className="rounded-2xl bg-surface p-5 ring-1 ring-line">
       <div className="mb-4 flex items-center gap-2 text-[13.5px] font-medium text-fg">
-        <span className="flex size-5 items-center justify-center rounded-full bg-white/10 text-[11px] tabular">{n}</span> {label}
+        <span className="flex size-5 items-center justify-center rounded-full bg-white/10 text-[11px] tabular">{++shown}</span> {label}
       </div>
       {children}
     </section>
   )
+  const subsection = (label: string, children: React.ReactNode) => (
+    <div>
+      <div className="mb-3 text-[13px] font-medium text-fg">{label}</div>
+      {children}
+    </div>
+  )
+  const hasMachines = Boolean(machines.data?.length) || location !== 'local'
 
   return (
     <Page>
@@ -549,7 +558,7 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
                   ['weekly', 'Chaque semaine'],
                   ['monthly', 'Chaque mois'],
                   ['interval', 'Intervalle'],
-                  ['cron', 'Avancé (cron)'],
+                  ['cron', 'Personnalisé (cron)'],
                   ['event', 'Après un événement'],
                 ] as [Preset, string][]
               ).map(([p, l]) => (
@@ -651,7 +660,7 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
             {preset === 'event' && <p className="text-xs text-fg-3">Protection contre les répétitions : 5 minutes minimum entre deux déclenchements, jamais sur ses propres missions, et mise en pause automatique au-delà de 12 déclenchements par heure.</p>}
           </div>,
         )}
-        {section(
+        {hasMachines && section(
           3,
           'Où',
           <div className="space-y-2">
@@ -675,8 +684,9 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
             </p>
           </div>,
         )}
-        {section(
-          4,
+        <section className="rounded-2xl bg-surface p-5 ring-1 ring-line">
+        <AdvancedSection label="Options avancées : heure manquée, limites">
+        {subsection(
           'Si l’heure prévue est manquée',
           <div className="space-y-2">
             <div className="grid grid-cols-3 gap-2">
@@ -690,8 +700,7 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
             <p className="text-xs text-fg-3">Une cible qui peut modifier des fichiers ou exécuter des commandes n’est jamais relancée sans votre confirmation, et une exécution interrompue n’est jamais rejouée automatiquement.</p>
           </div>,
         )}
-        {section(
-          5,
+        {subsection(
           'Limites',
           <div className="space-y-3">
             <div className="flex flex-wrap items-end gap-4">
@@ -712,9 +721,11 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
                 <Segmented value={failurePolicy} onChange={setFailurePolicy} options={[{ value: 'notify', label: 'Me notifier' }, { value: 'pause', label: 'Mettre en pause' }]} />
               </div>
             </div>
-            <p className="text-xs text-fg-3">Le budget ne compte que la dépense API mesurée ou estimée : l’usage d’un abonnement n’a pas de prix et n’est pas compté. Les permissions, approbations et budgets du compagnon s’appliquent toujours ; un compagnon en mode manuel refuse les missions automatiques.</p>
+            <p className="text-xs text-fg-3">Le budget ne compte que la dépense API mesurée ou estimée : l’usage d’un abonnement n’a pas de prix et n’est pas compté. Les permissions, demandes d’accord et budgets du compagnon s’appliquent toujours ; un compagnon en mode manuel refuse les missions automatiques.</p>
           </div>,
         )}
+        </AdvancedSection>
+        </section>
         <div className="flex items-center justify-end gap-2 pb-6">
           {blocker && <span className="mr-auto text-[12px] text-warning">{blocker}</span>}
           <Button variant="ghost" onClick={() => navigate('/automations')}>Annuler</Button>

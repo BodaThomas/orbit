@@ -31,9 +31,8 @@ const TABS = [
   { key: 'activity', label: 'Activité' },
   { key: 'memory', label: 'Mémoire' },
   { key: 'files', label: 'Fichiers' },
-  { key: 'tools', label: 'Permissions' },
   { key: 'stats', label: 'Statistiques' },
-  { key: 'config', label: 'Configuration' },
+  { key: 'tools', label: 'Réglages' },
 ] as const
 
 /** What this companion is allowed to do, as short chips for empty states. */
@@ -328,7 +327,7 @@ function Config({ agent }: { agent: Agent }) {
     ['Modèle', agent.model === 'default' ? 'Modèle par défaut du moteur' : agent.model],
     ['Effort de raisonnement', agent.effort ? (EFFORT_LEVELS.find((e) => e.id === agent.effort)?.label ?? agent.effort) : 'Par défaut'],
     ['Autonomie', AUTONOMY_LABELS[agent.autonomy]],
-    ['Isolation', agent.isolation === 'strict' ? 'Renforcée (Seatbelt Orbit)' : 'Standard (politique + bac à sable du moteur)'],
+    ['Isolation', agent.isolation === 'strict' ? 'Renforcée (confinée au dossier par macOS)' : 'Standard (règles d’Orbit et protections du moteur)'],
     ['Dossier de travail', agent.workingDirectory ?? '—'],
     ['Machine', machine ? `${machine.name} · ${machine.status === 'online' ? 'en ligne' : `hors ligne${machine.lastSyncedAt ? `, synchronisée ${relative(machine.lastSyncedAt)}` : ''}`}` : agent.runtime === 'remote' ? 'Machine distante introuvable' : 'Ce Mac'],
     ...(machine ? [['Moteur sur la machine', remoteEngine ? (remoteEngine.available ? `${engine.label} prêt${remoteEngine.version ? ` (${remoteEngine.version})` : ''}` : `${engine.label} indisponible : ${remoteEngine.detail}`) : `${engine.label} non détecté sur ${machine.name}`] as [string, React.ReactNode]] : []),
@@ -481,15 +480,25 @@ export function CompanionProfilePage({ agentId, tab }: { agentId: string; tab?: 
       />
 
       <div className="grid grid-cols-[minmax(0,1fr)_296px] items-start gap-4">
-        <div className={cn('card min-h-[320px] p-2', (current === 'stats' || current === 'memory' || current === 'tools' || current === 'config') && 'p-5')}>
+        <div className={cn('card min-h-[320px] p-2', (current === 'stats' || current === 'memory' || current === 'tools') && 'p-5')}>
           {current === 'conversations' && <Conversations agent={agent} />}
           {current === 'missions' && <Missions agent={agent} />}
           {current === 'activity' && (activity.data?.length ? activity.data.map((e) => <ActivityEventRow key={e.id} event={e} agent={agent} />) : <OrbitEmptyState appearance={agent.appearance} compact title="Aucune activité" body={`Les actions de ${agent.name} apparaîtront ici en temps réel.`} />)}
           {current === 'memory' && <Memory agent={agent} />}
           {current === 'files' && <Files agent={agent} />}
-          {current === 'tools' && <Tools agent={agent} />}
+          {current === 'tools' && (
+            <div className="space-y-8">
+              <section>
+                <h2 className="mb-3 text-[13.5px] font-medium text-fg">Configuration</h2>
+                <Config agent={agent} />
+              </section>
+              <section>
+                <h2 className="mb-3 text-[13.5px] font-medium text-fg">Permissions</h2>
+                <Tools agent={agent} />
+              </section>
+            </div>
+          )}
           {current === 'stats' && <Stats agent={agent} />}
-          {current === 'config' && <Config agent={agent} />}
         </div>
 
         <aside className="space-y-3">

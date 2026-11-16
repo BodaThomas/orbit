@@ -5,7 +5,7 @@ import { ENGINE_INFO, isAgentEngine } from '@shared/engines'
 import type { PlanApprovalPolicy, AgentPermissions, ConstellationLimits, ConstellationMember } from '@shared/types'
 import { Page, PageLoading } from '@/components/shell/Page'
 import { Button } from '@/components/ui/button'
-import { Badge, Input, Label, Segmented, Switch, Textarea } from '@/components/ui/field'
+import { AdvancedSection, Badge, Input, Label, Segmented, Switch, Textarea } from '@/components/ui/field'
 import { call } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { useAction, useAgents, useConstellations } from '@/lib/queries'
@@ -15,14 +15,18 @@ import { toast } from 'sonner'
 import { navigate } from '@/stores/router'
 
 const STEPS = [
-  { key: 'identity', label: 'Nom' },
-  { key: 'goal', label: 'Objectif' },
+  { key: 'identity', label: 'Objectif' },
   { key: 'team', label: 'Équipe' },
   { key: 'roles', label: 'Rôles' },
   { key: 'frame', label: 'Cadre' },
-  { key: 'limits', label: 'Limites' },
   { key: 'review', label: 'Validation' },
 ] as const
+
+const PLAN_APPROVAL_HINT: Record<'auto' | 'writes' | 'always', string> = {
+  auto: 'Les plans vérifiés par Orbit démarrent aussitôt.',
+  writes: 'Votre accord est demandé quand une sous-mission peut modifier des fichiers ou exécuter des commandes.',
+  always: 'Votre accord est demandé pour chaque plan.',
+}
 
 const DEFAULT_LIMITS: ConstellationLimits = { maxDepth: 2, maxSubtasks: 8, maxParallel: 2, maxDurationMin: 60, maxTokens: 2_000_000, maxBudgetUsd: 5 }
 
@@ -100,7 +104,7 @@ export function ConstellationWizardPage({ constellationId }: { constellationId?:
     if (missing.length) warnings.push(`${missing.map((a) => a!.name).join(', ')} n’ont pas de dossier : choisissez le dossier de la constellation.`)
   }
   const coordinator = d.coordinatorAgentId ? byId.get(d.coordinatorAgentId) : null
-  const canNext = [d.name.trim().length > 0, true, d.members.length >= 2 && Boolean(d.coordinatorAgentId), true, true, true, warnings.length === 0][step]
+  const canNext = [d.name.trim().length > 0, d.members.length >= 2 && Boolean(d.coordinatorAgentId), true, true, warnings.length === 0][step]
 
   const create = useAction('constellations.create', { success: (c) => `« ${c.name} » est prête`, onSuccess: () => navigate('/constellations') })
   const update = useAction('constellations.update', { success: 'Constellation mise à jour', onSuccess: () => navigate('/constellations') })
@@ -151,18 +155,16 @@ export function ConstellationWizardPage({ constellationId }: { constellationId?:
               </div>
               <div>
                 <Label hint="Pour vous retrouver">Description</Label>
-                <Textarea value={d.description} onChange={(e) => set('description', e.target.value)} className="min-h-24" placeholder="Une équipe qui analyse, développe et vérifie les évolutions d’Orbit." />
+                <Textarea value={d.description} onChange={(e) => set('description', e.target.value)} className="min-h-20" placeholder="Une équipe qui analyse, développe et vérifie les évolutions d’Orbit." />
+              </div>
+              <div>
+                <Label hint="Rappelé au coordinateur à chaque exécution">Objectif principal</Label>
+                <Textarea value={d.objective} onChange={(e) => set('objective', e.target.value)} className="min-h-40" placeholder="Faire évoluer Orbit avec des changements petits, testés et documentés." />
+                <p className="mt-2 text-xs text-fg-3">Chaque lancement précise ensuite la demande du moment. L’objectif sert de cap commun.</p>
               </div>
             </div>
           )}
           {step === 1 && (
-            <div>
-              <Label hint="Rappelé au coordinateur à chaque exécution">Objectif principal</Label>
-              <Textarea autoFocus value={d.objective} onChange={(e) => set('objective', e.target.value)} className="min-h-40" placeholder="Faire évoluer Orbit avec des changements petits, testés et documentés." />
-              <p className="mt-2 text-xs text-fg-3">Chaque lancement précise ensuite la demande du moment. L’objectif sert de cap commun.</p>
-            </div>
-          )}
-          {step === 2 && (
             <div className="space-y-4">
               <div>
                 <Label hint="Un compagnon peut appartenir à plusieurs constellations">Compagnons</Label>
@@ -202,7 +204,7 @@ export function ConstellationWizardPage({ constellationId }: { constellationId?:
               )}
             </div>
           )}
-          {step === 3 && (
+          {step === 2 && (
             <div className="space-y-3">
               {d.members.map((m) => {
                 const a = byId.get(m.agentId)
@@ -230,7 +232,7 @@ export function ConstellationWizardPage({ constellationId }: { constellationId?:
               })}
             </div>
           )}
-          {step === 4 && (
+          {step === 3 && (
             <div className="space-y-5">
               <div>
                 <Label hint="Choisi par vous : tous les membres y travaillent">Dossier de travail</Label>
@@ -255,8 +257,8 @@ export function ConstellationWizardPage({ constellationId }: { constellationId?:
                   value={d.workspaceMode}
                   onChange={(v) => set('workspaceMode', v)}
                   options={[
-                    { value: 'shared', label: 'Dossier partagé, un rédacteur à la fois' },
-                    { value: 'worktrees', label: 'Un worktree Git par rédacteur' },
+                    { value: 'shared', label: 'Dossier partagé, un compagnon écrit à la fois' },
+                    { value: 'worktrees', label: 'Une copie Git par compagnon qui écrit' },
                   ]}
                 />
                 <p className="mt-2 flex gap-2 text-xs leading-relaxed text-fg-3">
@@ -278,28 +280,6 @@ export function ConstellationWizardPage({ constellationId }: { constellationId?:
                 </div>
                 <p className="mt-2 flex gap-2 text-xs text-fg-3"><ShieldCheck className="mt-0.5 size-3.5 shrink-0" />Chaque action reste soumise aux règles et demandes d’accord habituelles du compagnon qui l’exécute.</p>
               </div>
-            </div>
-          )}
-          {step === 5 && (
-            <div className="space-y-5">
-              <div>
-                <div className="mb-2 text-xs font-medium text-fg-2">Consommation</div>
-                <div className="grid grid-cols-3 gap-3">
-                  <NumberField label="Budget mesuré" hint="Dépense API connue" value={d.limits.maxBudgetUsd} onChange={(v) => set('limits', { ...d.limits, maxBudgetUsd: v })} min={0} max={10000} step={0.5} suffix="$" nullable />
-                  <NumberField label="Jetons" value={d.limits.maxTokens} onChange={(v) => set('limits', { ...d.limits, maxTokens: v })} min={1000} max={100_000_000} step={50000} nullable />
-                  <NumberField label="Durée maximale" value={d.limits.maxDurationMin} onChange={(v) => set('limits', { ...d.limits, maxDurationMin: v ?? 60 })} min={1} max={1440} suffix="min" />
-                </div>
-                <p className="mt-2 text-xs text-fg-3">Un abonnement (Claude Code, Codex via ChatGPT) n’a pas de coût mesurable : seuls les jetons, la durée et le nombre de sous-missions le limitent. Orbit ne promet pas de plafond en dollars dans ce cas.</p>
-              </div>
-              <div>
-                <div className="mb-2 text-xs font-medium text-fg-2">Délégation</div>
-                <div className="grid grid-cols-3 gap-3">
-                  <NumberField label="Sous-missions au total" value={d.limits.maxSubtasks} onChange={(v) => set('limits', { ...d.limits, maxSubtasks: v ?? 1 })} min={1} max={50} />
-                  <NumberField label="En parallèle" value={d.limits.maxParallel} onChange={(v) => set('limits', { ...d.limits, maxParallel: v ?? 1 })} min={1} max={8} />
-                  <NumberField label="Tours de délégation" hint="Profondeur" value={d.limits.maxDepth} onChange={(v) => set('limits', { ...d.limits, maxDepth: v ?? 1 })} min={1} />
-                </div>
-                <p className="mt-2 text-xs text-fg-3">Un membre ne peut pas déléguer à son tour, et le coordinateur ne peut pas se confier de mission : aucune boucle possible.</p>
-              </div>
               <div>
                 <div className="mb-2 text-xs font-medium text-fg-2">Validation des plans</div>
                 <Segmented
@@ -311,11 +291,31 @@ export function ConstellationWizardPage({ constellationId }: { constellationId?:
                     { value: 'always', label: 'Toujours', title: 'Votre accord pour chaque plan' },
                   ]}
                 />
-                <p className="mt-2 text-xs text-fg-3">Dans tous les cas, un plan reçu au fil d’une discussion avec le coordinateur, ou que le coordinateur vous soumet lui-même, attend votre accord explicite. Un accord vaut pour un plan précis, pas pour les suivants.</p>
+                <p className="mt-2 text-xs text-fg-3"><span className="text-fg-2">{PLAN_APPROVAL_HINT[d.planApproval]}</span> Dans tous les cas, un plan reçu au fil d’une discussion avec le coordinateur, ou que le coordinateur vous soumet lui-même, attend votre accord explicite. Un accord vaut pour un plan précis, pas pour les suivants.</p>
               </div>
+              <AdvancedSection label="Limites de consommation et de délégation">
+                <div>
+                  <div className="mb-2 text-xs font-medium text-fg-2">Consommation</div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <NumberField label="Budget mesuré" hint="Dépense API connue" value={d.limits.maxBudgetUsd} onChange={(v) => set('limits', { ...d.limits, maxBudgetUsd: v })} min={0} max={10000} step={0.5} suffix="$" nullable />
+                    <NumberField label="Jetons" value={d.limits.maxTokens} onChange={(v) => set('limits', { ...d.limits, maxTokens: v })} min={1000} max={100_000_000} step={50000} nullable />
+                    <NumberField label="Durée maximale" value={d.limits.maxDurationMin} onChange={(v) => set('limits', { ...d.limits, maxDurationMin: v ?? 60 })} min={1} max={1440} suffix="min" />
+                  </div>
+                  <p className="mt-2 text-xs text-fg-3">Un abonnement (Claude Code, Codex via ChatGPT) n’a pas de coût mesurable : seuls les jetons, la durée et le nombre de sous-missions le limitent. Orbit ne promet pas de plafond en dollars dans ce cas.</p>
+                </div>
+                <div>
+                  <div className="mb-2 text-xs font-medium text-fg-2">Délégation</div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <NumberField label="Sous-missions au total" value={d.limits.maxSubtasks} onChange={(v) => set('limits', { ...d.limits, maxSubtasks: v ?? 1 })} min={1} max={50} />
+                    <NumberField label="En parallèle" value={d.limits.maxParallel} onChange={(v) => set('limits', { ...d.limits, maxParallel: v ?? 1 })} min={1} max={8} />
+                    <NumberField label="Tours de délégation" hint="Profondeur" value={d.limits.maxDepth} onChange={(v) => set('limits', { ...d.limits, maxDepth: v ?? 1 })} min={1} />
+                  </div>
+                  <p className="mt-2 text-xs text-fg-3">Un membre ne peut pas déléguer à son tour, et le coordinateur ne peut pas se confier de mission : aucune boucle possible.</p>
+                </div>
+              </AdvancedSection>
             </div>
           )}
-          {step === 6 && (
+          {step === 4 && (
             <div className="space-y-4">
               {warnings.length > 0 && (
                 <div className="space-y-1 rounded-[11px] bg-warning/[0.06] p-3 text-[12.5px] text-fg-2 ring-1 ring-warning/20">

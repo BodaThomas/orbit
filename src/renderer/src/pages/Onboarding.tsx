@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowRight, FlaskConical, Sparkles } from 'lucide-react'
+import { ArrowLeft, ArrowRight, FlaskConical, Sparkles } from 'lucide-react'
 import { COMPANION_PRESETS, DEFAULT_PERMISSIONS, EXPRESSIONS, PALETTE_IDS, PALETTES, SPECIES, TEXTURES } from '@shared/catalog'
 import type { Agent, Appearance } from '@shared/types'
 import { Button } from '@/components/ui/button'
@@ -100,6 +100,12 @@ export function OnboardingPage() {
     <div className="relative flex h-full flex-col overflow-hidden bg-[radial-gradient(ellipse_at_50%_35%,#171a28_0%,#0d0e14_55%,#0b0c10_100%)]">
       <div className="drag absolute inset-x-0 top-0 h-[52px]" />
       <Stars />
+      {/* Going back stops once the companion exists: later edits would not reach it. */}
+      {step > 0 && step < 5 && !agent && (
+        <button onClick={() => setStep((s) => s - 1)} className="no-drag absolute top-[60px] left-8 z-20 flex items-center gap-1 text-[13px] text-fg-3 hover:text-fg">
+          <ArrowLeft className="size-3.5" /> Retour
+        </button>
+      )}
       <div className="relative z-10 flex flex-1 items-center justify-center px-8">
         <div key={step} className="orbit-step w-full max-w-[640px] text-center">
           {step === 0 && (

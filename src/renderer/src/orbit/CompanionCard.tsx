@@ -19,7 +19,7 @@ const STATUS_TEXT: Partial<Record<Agent['status'], string>> = {
 const SHORT: Record<Agent['status'], string> = {
   available: 'Disponible',
   working: 'En mission',
-  awaiting_approval: 'En attente',
+  awaiting_approval: 'Attend votre accord',
   done: 'Terminé',
   error: 'Erreur',
   offline: 'Hors ligne',
