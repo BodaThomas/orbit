@@ -132,6 +132,7 @@ export const planTaskInputSchema = z.object({
   context: z.string().max(8000).optional(),
   dependsOn: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
   readOnly: z.boolean().optional(),
+  writes: z.array(z.string().trim().min(1).max(300)).max(10).optional(),
 })
 
 export const recurrenceSchema = z.discriminatedUnion('kind', [

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { AgentPermissions, ConstellationLimits } from '@shared/types'
 import { ConstellationEngine, DEFAULT_LIMITS } from '../src/main/core/constellations/engine'
-import { findCycle, validatePlan } from '../src/main/core/constellations/protocol'
+import { findCycle, normalizeWrites, scopesOverlap, validatePlan } from '../src/main/core/constellations/protocol'
 import type { AgentEngine, EngineId, EngineRunRequest } from '../src/main/core/engine/types'
 import { makeCore, novaInput, waitFor } from './helpers'
 
@@ -16,7 +16,7 @@ type Script = (req: EngineRunRequest, call: number) => { text: string; delayMs?:
 
 /** Scripted agent engine. Records every prompt and concurrency. */
 function scripted(id: EngineId, script: Script) {
-  const log: { prompt: string; perms: AgentPermissions; workspace: string; at: number }[] = []
+  const log: { prompt: string; perms: AgentPermissions; workspace: string; writeScopes: string[] | undefined; at: number }[] = []
   let live = 0
   let maxLive = 0
   let calls = 0
@@ -28,7 +28,7 @@ function scripted(id: EngineId, script: Script) {
     run: async (req, io) => {
       live++
       maxLive = Math.max(maxLive, live)
-      log.push({ prompt: req.prompt, perms: req.policy.permissions, workspace: req.policy.workspace, at: Date.now() })
+      log.push({ prompt: req.prompt, perms: req.policy.permissions, workspace: req.policy.workspace, writeScopes: req.policy.writeScopes, at: Date.now() })
       try {
         const r = await script(req, calls++)
         io.emit({ type: 'session', sessionId: `s-${req.runId}`, model: 'm' })
@@ -110,6 +110,23 @@ describe('constellations — protocole', () => {
     expect(validatePlan('Je réponds seul.', ctx).noDelegation).toBe(true)
     expect(validatePlan(plan([{ id: 'a', assignee: 'Milo', objective: 'x' }]), ctx).tasks[0]!.agentId).toBe('m')
   })
+
+  it('zones d’écriture : chemins relatifs normalisés, sorties du dossier refusées', () => {
+    expect(normalizeWrites(['./docs/qa/', 'docs/qa', 'maquettes', 'maquettes/v4'])).toEqual({ writes: ['docs/qa', 'maquettes'], error: null })
+    expect(normalizeWrites(['docs', '.']).writes).toEqual([])
+    expect(normalizeWrites(['../ailleurs']).error).toContain('sort du dossier')
+    expect(normalizeWrites(['/etc']).error).toContain('relatif')
+    expect(scopesOverlap(['docs/qa'], ['maquettes'])).toBe(false)
+    expect(scopesOverlap(['docs'], ['docs/qa'])).toBe(true)
+    expect(scopesOverlap(['docs-old'], ['docs'])).toBe(false)
+    expect(scopesOverlap([], ['docs'])).toBe(true)
+    const agents = [{ id: 'n', name: 'Nova', enabled: true }, { id: 'm', name: 'Milo', enabled: true }]
+    const definition = { coordinatorAgentId: 'n', members: [{ agentId: 'n', role: '', responsibilities: '', canDelegate: true }, { agentId: 'm', role: '', responsibilities: '', canDelegate: false }], limits: DEFAULT_LIMITS }
+    const ctx = { definition, agents, coordinatorCanDelegate: true }
+    expect(validatePlan(plan([{ id: 'a', assignee: 'Milo', objective: 'x', writes: ['../hors'] }]), ctx).errors[0]).toContain('sort du dossier')
+    expect(validatePlan(plan([{ id: 'a', assignee: 'Milo', objective: 'x', writes: ['docs/'] }]), ctx).tasks[0]!.writes).toEqual(['docs'])
+    expect(validatePlan(plan([{ id: 'a', assignee: 'Milo', objective: 'x', readOnly: true, writes: ['docs'] }]), ctx).tasks[0]!.writes).toEqual([])
+  })
 })
 
 describe('constellations — orchestration', () => {
@@ -160,6 +177,31 @@ describe('constellations — orchestration', () => {
     const w = writers.core.constellations.launch(writers.def.id, 'deux écritures')
     await writers.done(w.id)
     expect(writers.codex.maxLive()).toBe(1)
+  })
+
+  it('zones d’écriture distinctes : les rédacteurs travaillent en parallèle, les zones qui se recouvrent attendent', async () => {
+    const files = { ...ALL, runCommands: false }
+    const apart = team({ plan: [{ id: 'qa', assignee: 'Milo', objective: 'rapport', writes: ['docs/qa'] }, { id: 'ui', assignee: 'Milo', objective: 'maquette', writes: ['maquettes'] }], member: () => ({ text: result('ok'), delayMs: 60 }), limits: { maxParallel: 2 }, permissions: files })
+    const a = apart.core.constellations.launch(apart.def.id, 'deux zones')
+    await apart.done(a.id)
+    expect(apart.core.constellations.run(a.id).status).toBe('completed')
+    expect(apart.claude.maxLive()).toBe(2)
+    const scopes = apart.claude.log.map((l) => l.writeScopes).filter(Boolean)
+    expect(scopes).toContainEqual([join(apart.ws, 'docs/qa')])
+    expect(scopes).toContainEqual([join(apart.ws, 'maquettes')])
+
+    const nested = team({ plan: [{ id: 'a', assignee: 'Milo', objective: 'tout docs', writes: ['docs'] }, { id: 'b', assignee: 'Milo', objective: 'docs/qa', writes: ['docs/qa'] }], member: () => ({ text: result('ok'), delayMs: 40 }), limits: { maxParallel: 2 }, permissions: files })
+    const n = nested.core.constellations.launch(nested.def.id, 'zones imbriquées')
+    await nested.done(n.id)
+    expect(nested.claude.maxLive()).toBe(1)
+  })
+
+  it('zones d’écriture ignorées par l’ordonnanceur quand les commandes ne sont pas confinées', async () => {
+    // Codex without a command sandbox Orbit configures: its commands could write anywhere in the folder.
+    const t = team({ plan: [{ id: 'a', assignee: 'Atlas', objective: 'un', writes: ['a'] }, { id: 'b', assignee: 'Atlas', objective: 'deux', writes: ['b'] }], member: () => ({ text: result('ok'), delayMs: 40 }), limits: { maxParallel: 2 } })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    expect(t.codex.maxLive()).toBe(1)
   })
 
   it('les permissions ne s’élargissent jamais par délégation', async () => {

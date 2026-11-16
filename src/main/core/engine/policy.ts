@@ -166,6 +166,25 @@ const relTo = (ws: string, p: string) => {
   return r === '' ? '.' : r
 }
 
+/**
+ * First path written outside the run's write scopes. A sub-mission sharing its folder with
+ * others runs side by side with them only because it keeps to its scopes: anything else is
+ * refused, never asked, so a parallel writer cannot be overwritten by an approval click.
+ */
+function outsideScope(policy: RunPolicy, paths: string[]): string | undefined {
+  const scopes = policy.writeScopes
+  if (!scopes?.length) return undefined
+  const ws = realRootOf(policy.workspace)
+  // Only writes inside the shared folder compete with other members; the rest has its own rules.
+  return paths.filter(Boolean).find((x) => {
+    const abs = realResolve(ws, x)
+    return isInside(ws, abs) && !scopes.some((root) => isInside(root, abs))
+  })
+}
+
+const scopeDenial = (policy: RunPolicy, path: string, rule: string) =>
+  deny(rule, 'outside', `Hors de la zone d’écriture de cette sous-mission (${(policy.writeScopes ?? []).map((x) => relTo(policy.workspace, x)).join(', ')}) : ${path}. D’autres membres travaillent en parallèle dans ce dossier.`)
+
 export function evaluateTool(policy: RunPolicy, action: ToolAction): PolicyVerdict {
   const { permissions: p, autonomy, workspace } = policy
   const automated = autonomy === 'automated'
@@ -196,6 +215,8 @@ export function evaluateTool(policy: RunPolicy, action: ToolAction): PolicyVerdi
     case 'edit': {
       if (!p.writeFiles) return deny('edit.disabled', 'edit', 'Modification de fichiers non autorisée pour ce compagnon.')
       if (outside) return deny('edit.outside', 'outside', `Hors du dossier autorisé : ${outside}`)
+      const offScope = outsideScope(policy, paths)
+      if (offScope) return scopeDenial(policy, offScope, 'edit.out-of-scope')
       const rels = paths.map((x) => relTo(workspace, x))
       const key = `edit:${rels.join(',')}`
       const label = `Modifier ${rels.join(', ') || 'des fichiers'}`
@@ -242,9 +263,12 @@ function evaluateAutonomous(policy: RunPolicy, action: ToolAction): PolicyVerdic
       const unusual = action.paths.filter(Boolean).find((x) => !isInside(workspace, x) || isSensitivePath(realResolve(workspace, x)) || isSensitivePath(x))
       return auto('read', 'read', unusual ? `Lecture de ${unusual}` : 'Lecture.', Boolean(unusual))
     }
-    case 'edit':
+    case 'edit': {
       if (!p.writeFiles) return deny('edit.disabled', 'edit', 'Modification de fichiers non autorisée pour ce compagnon.')
+      const offScope = outsideScope(policy, action.paths)
+      if (offScope) return scopeDenial(policy, offScope, 'edit.out-of-scope')
       return auto('edit', 'edit', 'Modification de fichier.')
+    }
     case 'command': {
       if (!p.runCommands) return deny('command.disabled', 'opaque', 'Exécution de commandes non autorisée pour ce compagnon.')
       const command = action.command ?? ''
@@ -252,6 +276,8 @@ function evaluateAutonomous(policy: RunPolicy, action: ToolAction): PolicyVerdic
       const a = analyzeCommand(command, realRootOf(workspace), cwd)
       const protectedHit = [...a.paths, ...absolutePathsIn(command), ...action.paths].map((x) => inProtected(policy, x)).find(Boolean)
       if (protectedHit) return deny('command.protected', 'protected', `La commande vise les données d’Orbit (${protectedHit}) : un compagnon ne peut pas modifier ses propres permissions.`)
+      const offScope = outsideScope(policy, a.writes)
+      if (offScope) return scopeDenial(policy, offScope, 'command.out-of-scope')
       if (a.needs.write && !p.writeFiles && (ROUTINE.includes(a.category) || a.category === 'delete' || a.category === 'git-destructive'))
         return deny('command.needs-write', a.category, `Cette commande modifie des fichiers (${(CATEGORY_LABELS[a.category] ?? a.category).toLowerCase()}) : modification non autorisée pour ce compagnon.`)
       if (a.needs.network && !p.network && a.category !== 'privileged') return deny('command.needs-network', a.category, `Cette commande a besoin du réseau (${a.reason}) : accès réseau non autorisé pour ce compagnon.`)
@@ -307,6 +333,8 @@ function evaluateCommand(policy: RunPolicy, action: ToolAction, m: { automated: 
   // 4. Outside the folder: written anywhere → human; read outside system folders → human.
   const outsideWrite = a.writes.find((x) => !isInside(workspace, x) && !isTempPath(x))
   if (outsideWrite) return ask('command.write-outside', 'outside', `La commande écrit hors du dossier autorisé : ${outsideWrite}`)
+  const offScope = outsideScope(policy, a.writes)
+  if (offScope) return scopeDenial(policy, offScope, 'command.out-of-scope')
   const outsideRead = [...a.paths, ...absolutePathsIn(command)].find((x) => !isInside(workspace, x) && !isSystemPath(x))
   if (outsideRead) return ask('command.outside', 'outside', `La commande mentionne un chemin hors du dossier : ${outsideRead}`)
 

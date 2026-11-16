@@ -165,11 +165,13 @@ export function engineReadablePaths(engine: 'claude-code' | 'claude-agent' | 'co
 /** Confinement spec for one engine run, or null when the companion runs in standard mode. */
 export function engineConfinement(
   engine: 'claude-code' | 'claude-agent' | 'codex',
-  policy: { workspace: string; isolation: 'standard' | 'strict'; permissions: { writeFiles: boolean } },
+  policy: { workspace: string; isolation: 'standard' | 'strict'; permissions: { writeFiles: boolean }; writeScopes?: string[] },
   extra: { configDir?: string; binary?: string } = {},
 ): ConfinementSpec | null {
   if (policy.isolation !== 'strict') return null
   const e = engineReadablePaths(engine, extra)
   const t = toolchainPaths()
-  return { workspace: policy.workspace, readable: [...e.readable, ...t.readable], writable: [...e.writable, ...t.writable], workspaceWritable: policy.permissions.writeFiles }
+  // A scoped sub-mission keeps read access to the whole folder but writes only its scopes.
+  const scopes = policy.permissions.writeFiles ? (policy.writeScopes ?? []) : []
+  return { workspace: policy.workspace, readable: [...e.readable, ...t.readable], writable: [...e.writable, ...t.writable, ...scopes], workspaceWritable: policy.permissions.writeFiles && !scopes.length }
 }

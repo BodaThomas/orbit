@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { posix } from 'node:path'
 import { z } from 'zod'
 import type { Agent, AgentPermissions, ConstellationDefinition, ConstellationLimits, PlanDiff, PlanTaskRecord, StructuredResult, SubtaskSpec } from '@shared/types'
 import { redactSecrets } from '../security/sensitive'
@@ -20,6 +21,7 @@ const taskSchema = z.object({
   context: z.string().max(8000).default(''),
   dependsOn: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
   readOnly: z.boolean().default(false),
+  writes: z.array(z.string().trim().min(1).max(300)).max(10).default([]),
 })
 const planSchema = z.object({
   tasks: z.array(taskSchema).max(50).default([]),
@@ -50,12 +52,40 @@ export interface ExistingTask {
   agentId: string
   status: string
   /** Content of the task (when known): a finished key can only be re-sent unchanged. */
-  spec?: Pick<SubtaskSpec, 'objective' | 'expected' | 'context' | 'dependsOn' | 'readOnly'>
+  spec?: Pick<SubtaskSpec, 'objective' | 'expected' | 'context' | 'dependsOn' | 'readOnly' | 'writes'>
 }
 
-/** Same work: same companion, objective, expectation, context, dependencies and read-only flag. */
-export function sameWork(a: { agentId: string; objective: string; expected: string; context: string; dependsOn: string[]; readOnly: boolean }, b: typeof a): boolean {
-  return a.agentId === b.agentId && a.objective.trim() === b.objective.trim() && a.expected.trim() === b.expected.trim() && a.context.trim() === b.context.trim() && a.readOnly === b.readOnly && [...a.dependsOn].sort().join('\n') === [...b.dependsOn].sort().join('\n')
+/**
+ * Write scopes as the coordinator declares them, made canonical: relative folders inside the
+ * workspace, without duplicates or nested repeats. `.` means the whole folder, so the list
+ * collapses to empty (no scope). Absolute paths and `..` are refused.
+ */
+export function normalizeWrites(list: string[] | undefined): { writes: string[]; error: string | null } {
+  const out: string[] = []
+  for (const raw of list ?? []) {
+    const p = raw.trim().replace(/\\/g, '/')
+    if (posix.isAbsolute(p) || /^~/.test(p)) return { writes: [], error: `« ${raw} » doit être un chemin relatif au dossier de la constellation.` }
+    const n = posix.normalize(p).replace(/\/+$/, '')
+    if (n === '..' || n.startsWith('../')) return { writes: [], error: `« ${raw} » sort du dossier de la constellation.` }
+    if (n === '.' || n === '') return { writes: [], error: null }
+    out.push(n)
+  }
+  const sorted = [...new Set(out)].sort()
+  return { writes: sorted.filter((p) => !sorted.some((q) => p.startsWith(`${q}/`))), error: null }
+}
+
+/** Two sets of write scopes touch the same files (one folder contains the other). Empty → whole folder. */
+export function scopesOverlap(a: string[] | undefined, b: string[] | undefined): boolean {
+  if (!a?.length || !b?.length) return true
+  const inside = (x: string, y: string) => x === y || x.startsWith(`${y}/`)
+  return a.some((x) => b.some((y) => inside(x, y) || inside(y, x)))
+}
+
+const writesKey = (w: string[] | undefined) => [...(w ?? [])].sort().join('\n')
+
+/** Same work: same companion, objective, expectation, context, dependencies, read-only flag and write scopes. */
+export function sameWork(a: { agentId: string; objective: string; expected: string; context: string; dependsOn: string[]; readOnly: boolean; writes?: string[] }, b: typeof a): boolean {
+  return a.agentId === b.agentId && a.objective.trim() === b.objective.trim() && a.expected.trim() === b.expected.trim() && a.context.trim() === b.context.trim() && a.readOnly === b.readOnly && [...a.dependsOn].sort().join('\n') === [...b.dependsOn].sort().join('\n') && writesKey(a.writes) === writesKey(b.writes)
 }
 
 /** Last fenced ```orbit-plan block (or <orbit-plan>…</orbit-plan>) of a message. */
@@ -149,6 +179,12 @@ export function validatePlan(
       errors.push(`${t.id} : ${agent.name} est désactivé.`)
       continue
     }
+    const scoped = normalizeWrites(t.writes)
+    if (scoped.error) {
+      errors.push(`${t.id} : ${scoped.error}`)
+      continue
+    }
+    t.writes = t.readOnly ? [] : scoped.writes
     // A finished task is never re-run: reusing its id for different work would silently drop it.
     const prev = existing.find((e) => e.key === t.id)
     if (prev?.status === 'done' && prev.spec && !sameWork({ agentId: prev.agentId, ...prev.spec }, { ...t, agentId: agent.id })) {
@@ -170,10 +206,11 @@ export function validatePlan(
 }
 
 /** Stable identity of a plan: same tasks (resolved companion, content, dependencies) → same hash. */
-export function planHash(tasks: Pick<PlanTaskRecord, 'id' | 'agentId' | 'objective' | 'expected' | 'context' | 'dependsOn' | 'readOnly'>[], questions: string[] = []): string {
+export function planHash(tasks: Pick<PlanTaskRecord, 'id' | 'agentId' | 'objective' | 'expected' | 'context' | 'dependsOn' | 'readOnly' | 'writes'>[], questions: string[] = []): string {
   const canon = [...tasks]
     .sort((a, b) => a.id.localeCompare(b.id))
-    .map((t) => [t.id, t.agentId, t.objective.trim(), t.expected.trim(), t.context.trim(), [...t.dependsOn].sort(), t.readOnly])
+    // Scopes only join the canonical form when present: plans stored before they existed keep their hash.
+    .map((t) => [t.id, t.agentId, t.objective.trim(), t.expected.trim(), t.context.trim(), [...t.dependsOn].sort(), t.readOnly, ...(t.writes?.length ? [[...t.writes].sort()] : [])])
   return createHash('sha256').update(JSON.stringify([canon, questions.map((q) => q.trim())])).digest('hex').slice(0, 32)
 }
 
@@ -234,8 +271,8 @@ export function planningPrompt(o: { goal: string; definition: ConstellationDefin
     `## Comment déléguer`,
     `Organise le travail : décompose la demande en sous-missions confiées aux membres les plus adaptés. Tu peux d’abord explorer le contexte avec tes propres outils si nécessaire.`,
     `Termine ta réponse par UN bloc de code \`orbit-plan\` contenant du JSON strict :`,
-    '```orbit-plan\n{"tasks":[{"id":"recherche","assignee":"<nom du membre>","objective":"…","expected":"résultat attendu","context":"informations utiles à transmettre","dependsOn":[],"readOnly":true}]}\n```',
-    `Règles : au plus ${o.limits.maxSubtasks} sous-missions au total, ${o.limits.maxParallel} en parallèle ; « dependsOn » liste les id dont le résultat est nécessaire ; « readOnly »: true si la sous-mission ne doit rien modifier. Tu ne peux pas t’assigner de tâche. Ne transmets jamais de secret, mot de passe ou clé dans « context ».`,
+    '```orbit-plan\n{"tasks":[{"id":"recherche","assignee":"<nom du membre>","objective":"…","expected":"résultat attendu","context":"informations utiles à transmettre","dependsOn":[],"readOnly":true},{"id":"maquette","assignee":"<nom du membre>","objective":"…","expected":"…","context":"…","dependsOn":[],"readOnly":false,"writes":["maquettes/v2"]}]}\n```',
+    `Règles : au plus ${o.limits.maxSubtasks} sous-missions au total, ${o.limits.maxParallel} en parallèle ; « dependsOn » liste les id dont le résultat est nécessaire ; « readOnly »: true si la sous-mission ne doit rien modifier ; « writes » liste les dossiers (relatifs au dossier de travail) où elle a le droit d’écrire : deux sous-missions aux dossiers distincts tournent en parallèle, alors que sans « writes » elle bloque tout le dossier pendant qu’elle travaille. Tu ne peux pas t’assigner de tâche. Ne transmets jamais de secret, mot de passe ou clé dans « context ».`,
     `Si la demande ne nécessite pas de délégation, réponds directement et termine par \`\`\`orbit-plan\n{"tasks":[]}\n\`\`\`.`,
     PARALLEL_RULES,
     PLAN_CONTROL,
@@ -267,7 +304,7 @@ export function handoffPrompt(o: {
     o.spec.expected ? `## Résultat attendu\n${clean(o.spec.expected, 2000)}` : '',
     o.spec.context ? `## Informations transmises\n${clean(o.spec.context, 6000)}` : '',
     ...o.dependencyResults.map((d) => `## Résultat de « ${d.key} » (${d.agentName})\n${clean(d.text, 6000)}`),
-    `## Contraintes\n- Dossier autorisé : ${o.workspace ?? 'aucun (réponse uniquement)'}\n- Tu peux : ${permText(o.permissions)}${o.spec.readOnly ? '\n- Sous-mission en lecture seule : ne modifie rien.' : ''}\n- Ne délègue pas à ton tour.`,
+    `## Contraintes\n- Dossier autorisé : ${o.workspace ?? 'aucun (réponse uniquement)'}\n- Tu peux : ${permText(o.permissions)}${o.spec.readOnly ? '\n- Sous-mission en lecture seule : ne modifie rien.' : o.spec.writes?.length ? `\n- Tu n’écris que dans : ${o.spec.writes.join(', ')} (et le dossier temporaire). Toute écriture ailleurs sera refusée : d’autres membres travaillent en parallèle dans le même dossier.` : ''}\n- Ne délègue pas à ton tour.`,
     `Termine par un bloc \`orbit-result\` :\n\`\`\`orbit-result\n{"status":"done","summary":"ce que tu as fait et trouvé, en quelques phrases","files":["fichiers modifiés"]}\n\`\`\``,
   ]
     .filter(Boolean)
@@ -305,13 +342,13 @@ export function synthesisPrompt(o: { results: { key: string; agentName: string; 
 }
 
 /**
- * Sub-missions that write to the same folder run one after the other, read-only ones run
- * side by side: the plan's shape decides the wall time more than any single task.
+ * Sub-missions that write to overlapping folders run one after the other; read-only ones and
+ * writers with disjoint scopes run side by side: the plan's shape decides the wall time.
  */
 export const PARALLEL_RULES = [
   `Parallélisme : tout ce qui n’a pas besoin d’un résultat précédent démarre en même temps, à condition de ne pas écrire au même endroit.`,
   `- Une revue, un audit, une vérification ou une recherche qui ne livre qu’un compte rendu : « readOnly »: true (le compte rendu revient dans son résultat). Attention, en lecture seule le membre ne peut ni modifier de fichier ni lancer de commande.`,
-  `- Une sous-mission qui modifie des fichiers attend que les autres rédacteurs du même dossier aient fini : ne lui confie que ce qui exige vraiment d’écrire.`,
+  `- Une sous-mission qui modifie des fichiers : indique dans « writes » le ou les dossiers précis qu’elle produit (ex. « docs/qa/landing-v4 », « maquettes/v4 »). Deux sous-missions aux dossiers distincts tournent en parallèle ; sans « writes », elle bloque tout le dossier pendant qu’elle travaille.`,
   `- Ne mets dans « dependsOn » que ce dont la sous-mission a réellement besoin. Évite les chaînes revue → correction → contre-vérification à chaque tour : regroupe les corrections et ne prévois une contre-vérification que si un risque réel le justifie.`,
 ].join('\n')
 

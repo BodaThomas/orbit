@@ -36,6 +36,20 @@ const pol = (ws: string, permissions = ALL, autonomy: RunPolicy['autonomy'] = 's
 describe('niveau 1 — politique d’Orbit', () => {
   const { home, ws } = world()
 
+  it('zone d’écriture d’une sous-mission : refus hors zone, lecture toujours possible', () => {
+    const scoped: RunPolicy = { ...pol(ws), writeScopes: [join(ws, 'docs')] }
+    expect(evaluateTool(scoped, { kind: 'edit', name: 'Write', paths: [join(ws, 'docs', 'rapport.md')] }).decision).toBe('allow')
+    expect(evaluateTool(scoped, { kind: 'edit', name: 'Write', paths: ['docs/autre.md'] }).decision).toBe('allow')
+    const off = evaluateTool(scoped, { kind: 'edit', name: 'Write', paths: [join(ws, 'app.ts')] })
+    expect(off.decision).toBe('deny')
+    expect(off.reason).toContain('zone d’écriture')
+    expect(evaluateTool({ ...scoped, autonomy: 'autonomous' }, { kind: 'edit', name: 'Write', paths: [join(ws, 'app.ts')] }).decision).toBe('deny')
+    expect(evaluateTool(scoped, { kind: 'read', name: 'Read', paths: [join(ws, 'app.ts')] }).decision).toBe('allow')
+    expect(evaluateTool(scoped, { kind: 'command', name: 'Bash', command: 'touch app2.ts', paths: [] }).decision).toBe('deny')
+    expect(evaluateTool(scoped, { kind: 'command', name: 'Bash', command: 'touch docs/ok.md', paths: [] }).decision).not.toBe('deny')
+    expect(codexSandbox({ ...scoped, autonomy: 'automated' }).sandboxPolicy).toMatchObject({ writableRoots: [join(ws, 'docs')] })
+  })
+
   it('lecture autorisée dans le dossier', () => {
     expect(evaluateTool(pol(ws), { kind: 'read', name: 'Read', paths: [join(ws, 'app.ts')] }).decision).toBe('allow')
   })

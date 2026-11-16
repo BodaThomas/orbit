@@ -356,7 +356,7 @@ export function ConstellationRunPage({ runId }: { runId: string }) {
                   <MissionStatusLabel status={t.status} />
                   <span className="min-w-0">
                     <span className="block truncate text-[13px] text-fg">{t.spec.key} · {t.spec.objective.split('\n')[0]}</span>
-                    <span className="block truncate text-2xs text-fg-3">{t.dependsOnMissionIds.length ? `après ${t.dependsOnMissionIds.map((id) => d.tasks.find((x) => x.missionId === id)?.spec.key).join(', ')}` : 'sans dépendance'}{t.spec.readOnly ? ' · lecture seule' : ''} · tour {t.spec.round}</span>
+                    <span className="block truncate text-2xs text-fg-3">{t.dependsOnMissionIds.length ? `après ${t.dependsOnMissionIds.map((id) => d.tasks.find((x) => x.missionId === id)?.spec.key).join(', ')}` : 'sans dépendance'}{t.spec.readOnly ? ' · lecture seule' : t.spec.writes?.length ? ` · écrit dans ${t.spec.writes.join(', ')}` : ''} · tour {t.spec.round}</span>
                   </span>
                   <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-fg-2">{a && <CompanionAvatar appearance={a.appearance} size={18} />}<span className="truncate">{a?.name} · {a ? ENGINE_INFO[a.providerId].label : ''}</span></span>
                   <span className="text-right text-2xs text-fg-3 tabular">{compactNumber(t.inputTokens + t.outputTokens)} jetons · {duration(t.startedAt, t.finishedAt)}</span>

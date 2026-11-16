@@ -169,7 +169,7 @@ export function PendingPlanCard({ detail, byId }: { detail: ConstellationRunDeta
                       <span className="font-mono text-2xs text-fg-3">{t.id}</span>
                       <span className="min-w-0 flex-1 truncate text-fg">{t.objective.split('\n')[0]}</span>
                       {mark && <Badge tone={mark.tone}>{mark.label}</Badge>}
-                      <Badge tone={t.readOnly ? 'neutral' : 'warning'}>{t.readOnly ? 'lecture seule' : 'peut modifier'}</Badge>
+                      <Badge tone={t.readOnly ? 'neutral' : 'warning'}>{t.readOnly ? 'lecture seule' : t.writes?.length ? `écrit dans ${t.writes.join(', ')}` : 'peut modifier tout le dossier'}</Badge>
                     </div>
                     <div className="mt-0.5 text-2xs text-fg-3">{agent?.name ?? t.assignee}{t.dependsOn.length ? ` · après ${t.dependsOn.join(', ')}` : ' · sans dépendance'}{t.expected ? ` · attendu : ${t.expected.slice(0, 140)}` : ''}</div>
                   </li>
@@ -277,14 +277,14 @@ function RetryDialog({ detail, onClose }: { detail: ConstellationRunDetail; onCl
   )
 }
 
-type EditableTask = Pick<PlanTaskRecord, 'id' | 'assignee' | 'objective' | 'expected' | 'context' | 'readOnly'> & { dependsOn: string }
+type EditableTask = Pick<PlanTaskRecord, 'id' | 'assignee' | 'objective' | 'expected' | 'context' | 'readOnly'> & { dependsOn: string; writes: string }
 
 /** Edits the remaining tasks; finished or running ones are shown but locked. Saved as a new version to approve. */
 function EditPlanDialog({ detail, byId, onClose }: { detail: ConstellationRunDetail; byId: Map<string, Agent>; onClose: () => void }) {
   const base = detail.pendingPlan?.tasks.length ? detail.pendingPlan : [...detail.plans].reverse().find((p) => p.status === 'approved' && p.tasks.length)
   const locked = new Set(detail.tasks.filter((t) => t.status === 'done' || t.status === 'running' || t.status === 'waiting').map((t) => t.spec.key))
   const members = (detail.definition?.members ?? []).filter((m) => m.agentId !== detail.run.coordinatorAgentId).map((m) => byId.get(m.agentId)).filter((a): a is Agent => Boolean(a))
-  const [rows, setRows] = useState<EditableTask[]>((base?.tasks ?? []).map((t) => ({ ...t, assignee: byId.get(t.agentId)?.name ?? t.assignee, dependsOn: t.dependsOn.join(', ') })))
+  const [rows, setRows] = useState<EditableTask[]>((base?.tasks ?? []).map((t) => ({ ...t, assignee: byId.get(t.agentId)?.name ?? t.assignee, dependsOn: t.dependsOn.join(', '), writes: (t.writes ?? []).join(', ') })))
   const edit = useAction('constellations.editPlan', { success: 'Nouvelle version du plan : vérifiez les différences puis approuvez', onSuccess: onClose })
   const set = (i: number, patch: Partial<EditableTask>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
   return (
@@ -306,19 +306,25 @@ function EditPlanDialog({ detail, byId, onClose }: { detail: ConstellationRunDet
                     <Input className="h-7" value={r.dependsOn} disabled={isLocked} onChange={(e) => set(i, { dependsOn: e.target.value })} placeholder="ids séparés par des virgules" />
                     <label className="flex shrink-0 items-center gap-1"><input type="checkbox" checked={r.readOnly} disabled={isLocked} onChange={(e) => set(i, { readOnly: e.target.checked })} /> lecture seule</label>
                   </div>
+                  {!r.readOnly && (
+                    <div className="flex items-center gap-2 text-2xs text-fg-3">
+                      <span className="shrink-0">écrit dans</span>
+                      <Input className="h-7" value={r.writes} disabled={isLocked} onChange={(e) => set(i, { writes: e.target.value })} placeholder="dossiers séparés par des virgules (vide : tout le dossier)" />
+                    </div>
+                  )}
                 </div>
                 {isLocked ? <Badge tone="neutral">verrouillée</Badge> : <Button size="xs" variant="ghost" onClick={() => setRows(rows.filter((_, j) => j !== i))}><Trash2 /></Button>}
               </div>
             )
           })}
-          <Button size="sm" variant="ghost" onClick={() => setRows([...rows, { id: nextRowId(rows), assignee: members[0]?.name ?? '', objective: '', expected: '', context: '', readOnly: true, dependsOn: '' }])}><Plus /> Ajouter une sous-mission</Button>
+          <Button size="sm" variant="ghost" onClick={() => setRows([...rows, { id: nextRowId(rows), assignee: members[0]?.name ?? '', objective: '', expected: '', context: '', readOnly: true, dependsOn: '', writes: '' }])}><Plus /> Ajouter une sous-mission</Button>
         </div>
         <div className="flex justify-end gap-2 px-5 pt-3 pb-5">
           <Button variant="ghost" onClick={onClose}>Annuler</Button>
           <Button
             variant="primary"
             disabled={!rows.length || rows.some((r) => !r.id.trim() || !r.objective.trim()) || edit.isPending}
-            onClick={() => edit.mutate({ id: detail.run.id, tasks: rows.map((r) => ({ id: r.id.trim(), assignee: r.assignee, objective: r.objective, expected: r.expected, context: r.context, readOnly: r.readOnly, dependsOn: r.dependsOn.split(',').map((s) => s.trim()).filter(Boolean) })) })}
+            onClick={() => edit.mutate({ id: detail.run.id, tasks: rows.map((r) => ({ id: r.id.trim(), assignee: r.assignee, objective: r.objective, expected: r.expected, context: r.context, readOnly: r.readOnly, dependsOn: r.dependsOn.split(',').map((s) => s.trim()).filter(Boolean), writes: r.readOnly ? [] : r.writes.split(',').map((s) => s.trim()).filter(Boolean) })) })}
           >
             Enregistrer la nouvelle version
           </Button>

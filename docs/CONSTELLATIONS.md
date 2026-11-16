@@ -7,7 +7,8 @@ A constellation groups companions around a coordinator. Each companion keeps its
 1. **Planning**: the coordinator receives the request, the team (roles, engines, permissions) and the limits. It can explore with its own tools (without write access), then ends with a block:
    ````
    ```orbit-plan
-   {"tasks":[{"id":"research","assignee":"Milo","objective":"…","expected":"…","context":"…","dependsOn":[],"readOnly":true}]}
+   {"tasks":[{"id":"research","assignee":"Milo","objective":"…","expected":"…","context":"…","dependsOn":[],"readOnly":true},
+             {"id":"mockup","assignee":"Pixel","objective":"…","dependsOn":[],"readOnly":false,"writes":["mockups/v2"]}]}
    ```
    ````
 2. **Validation by Orbit** (`protocol.ts`): the assignee exists, is active and belongs to the constellation, the coordinator is allowed to delegate, no self-delegation, unique task IDs, known and **acyclic** dependencies, number of sub-missions within the limit. An invalid plan gets one correction request, then fails with a clear error.
@@ -26,7 +27,9 @@ Depth (delegation rounds), total sub-missions, parallelism, maximum duration (gl
 
 ## Concurrency
 
-- **Shared folder** (default): reads in parallel, one writer at a time.
+- **Shared folder** (default): reads in parallel. Writers declare the folders they produce in `writes` (relative to the workspace); two writers run side by side when their scopes do not overlap, otherwise one after the other. A writer without `writes` locks the whole folder.
+
+  Scopes are enforced, not advisory: Orbit's policy refuses any edit or detected command write outside them (inside the workspace), and the engine's command sandbox (Claude Code, Claude Agent SDK), Codex's writable roots and the strict Seatbelt profile only open those folders. Orbit creates the scope folders before the run. The scheduler only relies on scopes when the run is local and, if the sub-mission may run commands, the engine contains them (Claude engines on macOS, not in autonomous mode); otherwise the task locks the whole folder as before.
 - **Git worktrees**: each writer works on `orbit/<run>/<companion>` in its own worktree (stored in Orbit's data folder), branched from a dependency's branch when there is one. When the task ends, its work is committed on its branch. Orbit detects pairwise conflicts with `git merge-tree` (without touching any checkout), shows diffs and conflicts, and merges only when you click, in a clean folder (`merge --no-ff`, `merge --abort` on conflict). Worktrees separate workspaces; they are **not** a security boundary.
 
 ## Run lifecycle

@@ -59,6 +59,16 @@ export interface RunPolicy {
   commandsContained?: boolean
   /** Folders no tool may read or write: Orbit's data (database, grants), engine config. */
   protectedPaths?: string[]
+  /**
+   * Absolute folders inside the workspace this run may write (a delegated sub-mission that
+   * shares its folder with others). Absent or empty → the whole workspace.
+   */
+  writeScopes?: string[]
+}
+
+/** Where a run may write: its scopes when it has some, the whole workspace otherwise. */
+export function writeRoots(policy: Pick<RunPolicy, 'workspace' | 'writeScopes'>): string[] {
+  return policy.writeScopes?.length ? policy.writeScopes : [policy.workspace]
 }
 
 export interface EngineRunRequest {
