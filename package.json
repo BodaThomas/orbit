@@ -2,11 +2,20 @@
   "name": "orbit",
   "productName": "Orbit",
   "version": "0.1.0",
-  "description": "Orbit — your personal AI universe.",
+  "description": "Personal AI companions that work for you, on your Mac or your own server.",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "main": "./out/main/index.js",
-  "author": "Orbit",
+  "author": "Thomas Boda",
+  "homepage": "https://github.com/BodaThomas/orbit",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BodaThomas/orbit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/BodaThomas/orbit/issues"
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build && npm run build:runtime",
