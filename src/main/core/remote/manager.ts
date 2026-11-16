@@ -79,6 +79,9 @@ export class RemoteMachineManager {
   private connecting = new Map<string, Promise<RuntimeClient>>()
   private wanted = new Set<string>()
   private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private reconnectDelay = new Map<string, number>()
+  /** A live event arrived while catching up: the catch-up loops once more instead of losing it. */
+  private missedPush = new Set<string>()
   private scanned = new Map<string, { line: string; fingerprint: string }>()
   private pendingIdentity = new Map<string, { runtimeId: string; key: string; fingerprint: string; changed: boolean }>()
   private catchingUp = new Set<string>()
@@ -208,6 +211,8 @@ export class RemoteMachineManager {
     if (input.transport === 'ssh' && (!input.host || !/^[A-Za-z0-9.-]+$/.test(input.host))) throw new OrbitError('validation', 'Hôte invalide (nom DNS ou adresse IP).')
     if (input.user && !/^[a-z_][a-z0-9_-]{0,31}$/i.test(input.user)) throw new OrbitError('validation', 'Utilisateur invalide.')
     if (!input.runtimeHome.startsWith('/')) throw new OrbitError('validation', 'Dossier du runtime : chemin absolu attendu (par exemple /var/lib/orbit).')
+    // The path ends up in remote shell commands: plain characters only, never quoting surprises.
+    if (!/^\/[A-Za-z0-9._/-]+$/.test(input.runtimeHome)) throw new OrbitError('validation', 'Dossier du runtime : lettres, chiffres, « . », « _ », « - » et « / » uniquement (pas d’espace).')
     if (input.identityFile && (!input.identityFile.startsWith('/') || !existsSync(input.identityFile))) throw new OrbitError('validation', 'Clé SSH : chemin absolu d’un fichier existant attendu.')
     const id = newId()
     this.db.insert(runtimeMachines).values({ id, name: input.name, transport: input.transport, host: input.host, user: input.user, port: input.port, runtimeHome: input.runtimeHome, status: input.transport === 'ssh' ? 'pending_host_key' : 'ready', sshIdentityFile: input.identityFile ?? null, createdAt: nowIso() }).run()
@@ -443,14 +448,26 @@ export class RemoteMachineManager {
     } catch (err) {
       client.close()
       const msg = err instanceof Error ? err.message : String(err)
+      // A revoked client (403) stays refused: retrying would only hammer SSH forever.
+      const refused = err instanceof RuntimeRpcError && err.code === 403
+      if (refused) this.wanted.delete(id)
       if (!(err instanceof OrbitError && err.code === 'forbidden')) {
-        this.setStatus(id, 'error', msg)
+        this.setStatus(id, 'error', refused ? `${msg} Retirez puis ajoutez de nouveau cette machine.` : msg)
         this.scheduleReconnect(id)
       }
       throw err instanceof OrbitError ? err : new OrbitError('provider', `Connexion impossible à ${m.name} : ${msg}`)
     }
     client.onEvent((e) => {
-      if (!this.catchingUp.has(id)) this.applyEvents(id, [e], false)
+      if (this.catchingUp.has(id)) {
+        this.missedPush.add(id)
+        return
+      }
+      // Never jump over a gap: fetch what is missing in order instead.
+      if (e.seq > this.cursor(id) + 1) {
+        this.catchUp(id, client, 0).catch(() => client.close())
+        return
+      }
+      this.applyEvents(id, [e], false)
     })
     client.onLive((e) => this.onLive(e))
     const timers = [
@@ -465,10 +482,17 @@ export class RemoteMachineManager {
       this.setStatus(id, 'offline', reason)
       this.scheduleReconnect(id)
     })
-    await this.catchUp(id, client, hello.firstSeq)
-    await this.resendPending(id)
-    await this.syncConfig(id).catch((err: unknown) => this.db.update(runtimeMachines).set({ syncError: err instanceof Error ? err.message : String(err) }).where(eq(runtimeMachines.id, id)).run())
-    await this.reconcileTransfers(id)
+    try {
+      await this.catchUp(id, client, hello.firstSeq)
+      await this.resendPending(id)
+      await this.syncConfig(id).catch((err: unknown) => this.db.update(runtimeMachines).set({ syncError: err instanceof Error ? err.message : String(err) }).where(eq(runtimeMachines.id, id)).run())
+      await this.reconcileTransfers(id)
+    } catch (err) {
+      // Never keep a half-synced connection as « live »: the reconnection redoes the whole sequence.
+      client.close()
+      throw err instanceof OrbitError ? err : new OrbitError('provider', `Synchronisation impossible avec ${m.name} : ${err instanceof Error ? err.message : String(err)}`)
+    }
+    this.reconnectDelay.delete(id)
     void this.supervise(id, client)
     return client
   }
@@ -501,11 +525,15 @@ export class RemoteMachineManager {
     }
   }
 
-  private scheduleReconnect(id: string, delay = 5_000) {
+  /** Exponential backoff per machine (5 s → 60 s), reset once a connection fully succeeds. */
+  private scheduleReconnect(id: string, firstDelay?: number) {
     if (this.disposed || !this.wanted.has(id) || this.reconnectTimers.has(id)) return
+    const backoff = this.reconnectDelay.get(id) ?? 5_000
+    const delay = firstDelay ?? backoff
+    if (firstDelay == null) this.reconnectDelay.set(id, Math.min(60_000, backoff * 2))
     const t = setTimeout(() => {
       this.reconnectTimers.delete(id)
-      this.ensureClient(id).catch(() => this.scheduleReconnect(id, Math.min(60_000, delay * 2)))
+      this.ensureClient(id).catch(() => this.scheduleReconnect(id))
     }, delay)
     t.unref?.()
     this.reconnectTimers.set(id, t)
@@ -522,11 +550,13 @@ export class RemoteMachineManager {
    * pruned part of it, a consistent snapshot replaces the copy first.
    */
   private async catchUp(id: string, client: RuntimeClient, firstSeq: number) {
+    if (this.catchingUp.has(id)) return
     this.catchingUp.add(id)
     const notices: Parameters<RemoteMachineManager['notifyAll']>[1] = []
     try {
       let cursor = this.cursor(id)
-      if (cursor > 0 && cursor < firstSeq - 1) {
+      // Part of the log is gone (including for a brand-new client): start from a snapshot.
+      if (firstSeq > 1 && cursor < firstSeq - 1) {
         const snap = await client.request<{ tables: Record<string, Record<string, unknown>[]>; lastSeq: number }>('snapshot', {}, 120_000)
         const res = this.mirror.applySnapshot(id, snap.tables, nowIso())
         this.finishApply(id, res, snap.lastSeq, true)
@@ -534,9 +564,12 @@ export class RemoteMachineManager {
         cursor = snap.lastSeq
       }
       for (let guard = 0; guard < 500; guard++) {
+        this.missedPush.delete(id)
         const res = await client.request<{ events: RuntimeEvent[]; lastSeq: number }>('events.since', { cursor: this.cursor(id), limit: 1000 }, 60_000)
         notices.push(...this.applyEvents(id, res.events, true))
-        if (!res.events.length || res.events.at(-1)!.seq >= res.lastSeq) break
+        const drained = !res.events.length || res.events.at(-1)!.seq >= res.lastSeq
+        // Events pushed while this request was in flight were dropped above: fetch them too.
+        if (drained && !this.missedPush.has(id)) break
       }
     } finally {
       this.catchingUp.delete(id)
@@ -632,6 +665,16 @@ export class RemoteMachineManager {
     }
   }
 
+  /**
+   * Request id for one occurrence of a repeatable operation (cancel, release, put…): stable while
+   * that occurrence is unanswered (resent safely), new once it completed - so a second cancel or a
+   * second transfer is really executed instead of being answered from the first one's stored result.
+   */
+  private opId(prefix: string, method: string, entityId: string, suffix = ''): string {
+    const done = this.db.select({ id: remoteCommands.requestId }).from(remoteCommands).where(and(eq(remoteCommands.entityId, entityId), eq(remoteCommands.method, method), eq(remoteCommands.status, 'done'))).all().length
+    return `${prefix}_${entityId}${suffix}_${done + 1}`
+  }
+
   private fire(id: string, method: string, params: Record<string, unknown>, entity?: { kind: string; id: string }, requestId?: string) {
     void this.command(id, method, params, entity, requestId)
       .then((res) => this.afterCommand(method, entity?.id ?? null, res, null))
@@ -660,7 +703,7 @@ export class RemoteMachineManager {
 
   cancelMission(m: Mission): void {
     this.requireOnline(m.remoteMachineId!)
-    this.fire(m.remoteMachineId!, 'mission.cancel', { id: m.id }, { kind: 'mission', id: m.id }, `mx_${m.id}`)
+    this.fire(m.remoteMachineId!, 'mission.cancel', { id: m.id }, { kind: 'mission', id: m.id }, this.opId('mx', 'mission.cancel', m.id))
   }
 
   resolveApproval(row: ApprovalRequest, approve: boolean, scope: GrantScope): void {
@@ -784,7 +827,7 @@ export class RemoteMachineManager {
   // automations (owned by a runtime)
   pushAutomation(a: Automation): void {
     this.requireOnline(a.schedulerOwner)
-    this.fire(a.schedulerOwner, 'automation.put', { automation: this.automationSnapshot(a) }, { kind: 'automation', id: a.id }, `au_${a.id}_v${a.configVersion}`)
+    this.fire(a.schedulerOwner, 'automation.put', { automation: this.automationSnapshot(a) }, { kind: 'automation', id: a.id }, this.opId('au', 'automation.put', a.id, `_v${a.configVersion}`))
   }
 
   setAutomationStatus(a: Automation, status: 'active' | 'paused'): void {
@@ -804,7 +847,7 @@ export class RemoteMachineManager {
 
   releaseAutomation(a: Automation): void {
     this.requireOnline(a.schedulerOwner)
-    this.fire(a.schedulerOwner, 'automation.release', { id: a.id }, { kind: 'automation', id: a.id }, `ar_${a.id}_v${a.configVersion}`)
+    this.fire(a.schedulerOwner, 'automation.release', { id: a.id }, { kind: 'automation', id: a.id }, this.opId('ar', 'automation.release', a.id, `_v${a.configVersion}`))
   }
 
   /**
@@ -834,7 +877,7 @@ export class RemoteMachineManager {
     this.db.update(automationDefinitions).set({ ownerState: 'transferring', pendingOwner: to, updatedAt: nowIso() }).where(eq(automationDefinitions.id, a.id)).run()
     this.bus.invalidate('automations')
     this.journal.audit({ actor: 'user', agentId: null, action: 'automation.transfer', target: a.name, allowed: true, reason: `${from} → ${to}` })
-    if (from !== 'local') await this.command(from, 'automation.release', { id: a.id }, { kind: 'automation', id: a.id }, `ar_${a.id}_v${a.configVersion}`)
+    if (from !== 'local') await this.command(from, 'automation.release', { id: a.id }, { kind: 'automation', id: a.id }, this.opId('ar', 'automation.release', a.id, `_v${a.configVersion}`))
     // Step 3 & 4.
     await this.completeTransfer(a.id)
     a = s.get(a.id)
@@ -862,7 +905,7 @@ export class RemoteMachineManager {
       for (const m of def.members) await this.command(to, 'agent.put', { agent: this.agentSnapshot(this.parts!.agents.get(m.agentId)) }, { kind: 'agent', id: m.agentId })
       await this.command(to, 'constellation.put', { constellation: this.constellationSnapshot(def) }, { kind: 'constellation', id: def.id })
     }
-    await this.command(to, 'automation.put', { automation: snap }, { kind: 'automation', id: a.id }, `au_${a.id}_v${a.configVersion}_to_${to}`)
+    await this.command(to, 'automation.put', { automation: snap }, { kind: 'automation', id: a.id }, this.opId('au', 'automation.put', a.id, `_v${a.configVersion}_to_${to}`))
     const check = await this.command<{ automation: Automation; owned: boolean }>(to, 'automation.get', { id: a.id })
     if (!check.owned || check.automation.configVersion !== a.configVersion) throw new OrbitError('conflict', 'Le serveur n’a pas confirmé l’enregistrement : transfert suspendu.')
     this.db.update(automationDefinitions).set({ schedulerOwner: to, ownerState: 'active', pendingOwner: null, nextRunAt: check.automation.nextRunAt, updatedAt: nowIso() }).where(eq(automationDefinitions.id, a.id)).run()
@@ -878,7 +921,7 @@ export class RemoteMachineManager {
       try {
         if (r.schedulerOwner !== 'local' && r.schedulerOwner !== r.pendingOwner) {
           if (!this.isOnline(r.schedulerOwner)) continue
-          await this.command(r.schedulerOwner, 'automation.release', { id: r.id }, { kind: 'automation', id: r.id }, `ar_${r.id}_v${r.configVersion}`)
+          await this.command(r.schedulerOwner, 'automation.release', { id: r.id }, { kind: 'automation', id: r.id }, this.opId('ar', 'automation.release', r.id, `_v${r.configVersion}`))
         }
         if (r.pendingOwner !== 'local' && !this.isOnline(r.pendingOwner!)) continue
         await this.completeTransfer(r.id)
@@ -895,7 +938,7 @@ export class RemoteMachineManager {
     const to = a.pendingOwner
     if (to && to !== 'local') {
       this.requireOnline(to)
-      await this.command(to, 'automation.release', { id: a.id }, { kind: 'automation', id: a.id }, `ar_${a.id}_v${a.configVersion}_cancel`)
+      await this.command(to, 'automation.release', { id: a.id }, { kind: 'automation', id: a.id }, this.opId('ar', 'automation.release', a.id, `_v${a.configVersion}_cancel`))
     }
     if (a.schedulerOwner !== 'local') {
       // The previous owner (a runtime) was released when the transfer began: it comes back to this Mac.

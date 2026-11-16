@@ -59,14 +59,17 @@ command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] && HAS_SYSTEM
 command -v bwrap >/dev/null 2>&1 && ok "bubblewrap présent (isolation par mission)" || echo "· bubblewrap absent : apt install bubblewrap pour isoler chaque mission"
 
 HOME_DIR=/var/lib/$USER_NAME
-RT_HOME=$HOME_DIR/runtime
 if id "$USER_NAME" >/dev/null 2>&1; then
-  ok "Utilisateur $USER_NAME existant (inchangé)"
+  # Existing user: use its real home (the SSH key and the service must live there).
+  HOME_DIR=$(getent passwd "$USER_NAME" | cut -d: -f6)
+  [ -n "$HOME_DIR" ] && [ "$HOME_DIR" != "/" ] || fail "Dossier personnel de $USER_NAME introuvable : utilisez --user avec un autre nom."
+  ok "Utilisateur $USER_NAME existant (inchangé, dossier $HOME_DIR)"
 else
   useradd --system --home-dir "$HOME_DIR" --create-home --shell /bin/sh "$USER_NAME"
   passwd -l "$USER_NAME" >/dev/null 2>&1 || true
   ok "Utilisateur $USER_NAME créé (sans mot de passe, sans sudo)"
 fi
+RT_HOME=$HOME_DIR/runtime
 install -d -m 0700 -o "$USER_NAME" -g "$USER_NAME" "$HOME_DIR" "$RT_HOME"
 
 install -d -m 0755 -o root -g root /opt/orbit /opt/orbit/bin

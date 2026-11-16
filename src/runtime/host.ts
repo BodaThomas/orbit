@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSy
 import { createServer, type Server, type Socket } from 'node:net'
 import os from 'node:os'
 import { join } from 'node:path'
-import { and, eq, gte, inArray, sql, sum } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, sql, sum } from 'drizzle-orm'
 import type { OrbitEvent } from '@shared/ipc'
 import type { ConstellationLimits } from '@shared/types'
 import { composeCore, type Core } from '../main/core/compose'
@@ -13,7 +13,7 @@ import type { PlatformServices, SecretCipher } from '../main/core/platform'
 import type { ConfinementProof } from '../main/core/security/seatbelt'
 import { newId, nowIso, OrbitError } from '../main/core/util'
 import { schemaVersion, type DatabaseHandle } from '../main/infra/db/core'
-import { agentAppearances, agents, approvalRequests, automationDefinitions, constellationDefinitions, constellationMembers, fileChanges, missions, providerConnections, usageRecords } from '../main/infra/db/schema'
+import { agentAppearances, agents, approvalRequests, automationDefinitions, constellationDefinitions, constellationMembers, fileChanges, missionExecutions, missions, providerConnections, usageRecords } from '../main/infra/db/schema'
 import { ArtifactStore } from './artifacts'
 import { EventLog } from './event-log'
 import { fingerprintOf, generateIdentity, loadIdentity, nonce, signMessage, verifyMessage, type Identity } from './identity'
@@ -366,7 +366,8 @@ export class RuntimeHost {
       const m = this.core.missions.get(missionId)
       if (!['done', 'failed', 'cancelled'].includes(m.status)) return
       const paths = this.core.handle.db.select({ p: fileChanges.path, k: fileChanges.kind }).from(fileChanges).where(eq(fileChanges.missionId, missionId)).all().filter((f) => f.k !== 'deleted').map((f) => f.p)
-      const stored = this.artifacts.collect({ id: m.id, agentId: m.agentId, result: m.result, workspace: m.workspace }, paths)
+      const last = this.core.handle.db.select({ at: missionExecutions.startedAt }).from(missionExecutions).where(eq(missionExecutions.missionId, missionId)).orderBy(desc(missionExecutions.startedAt)).limit(1).get()
+      const stored = this.artifacts.collect({ id: m.id, agentId: m.agentId, result: m.result, workspace: m.workspace }, paths, last?.at ?? null)
       for (const a of stored) if (a.status !== 'stored') this.log.warn('artefact non conservé', { missionId, name: a.name, status: a.status })
     } catch (err) {
       this.log.error('collecte des artefacts en échec', { missionId, error: String(err) })
@@ -392,13 +393,18 @@ export class RuntimeHost {
       this.core.security.audit({ agentId: a.agentId, missionId: a.missionId, layer: 'approval', action: 'approval.expired', target: a.summary, decision: 'denied', reason: 'Sans réponse dans le délai.' })
     }
     this.pumpDeferred()
-    if (new Date(this.now()).getUTCMinutes() === 0) this.events.prune(30)
+    if (new Date(this.now()).getUTCMinutes() === 0) {
+      this.events.prune(30)
+      // Answers to old commands: kept long enough for any resend from a Mac that was away.
+      this.handle.sqlite.prepare('DELETE FROM rt_requests WHERE at < ?').run(new Date(this.now() - 90 * 86400_000).toISOString())
+    }
   }
 
   // Connections
 
   private sessionValid(c: Conn): boolean {
-    return Boolean(c.authed && c.session && c.session.expiresAt > this.now())
+    // Revocation from the CLI only touches the database: re-checked here so pushes stop at once.
+    return Boolean(c.authed && c.session && c.session.expiresAt > this.now() && !this.clientRevoked(c.session.clientId))
   }
 
   private accept(socket: Socket) {
@@ -474,7 +480,21 @@ export class RuntimeHost {
         if (done.error) throw new RpcError(RPC_ERRORS.conflict, done.error)
         return done.result ? JSON.parse(done.result) : null
       }
+      // Same request still running (resent before its answer): share its outcome, never run it twice.
+      const running = this.inflight.get(requestId)
+      if (running) return running
+      const pending = this.execute(conn, m, p, requestId)
+      this.inflight.set(requestId, pending)
+      const clear = () => this.inflight.delete(requestId)
+      pending.then(clear, clear)
+      return pending
     }
+    return this.execute(conn, m, p, null)
+  }
+
+  private inflight = new Map<string, Promise<unknown>>()
+
+  private async execute(conn: Conn | null, m: Method, p: Record<string, unknown>, requestId: string | null): Promise<unknown> {
     try {
       const result = await this.run(conn, m, p)
       if (requestId) this.handle.sqlite.prepare('INSERT OR IGNORE INTO rt_requests (id, client_id, method, result, at) VALUES (?, ?, ?, ?, ?)').run(requestId, conn?.session?.clientId ?? null, m, JSON.stringify(result ?? null), nowIso())

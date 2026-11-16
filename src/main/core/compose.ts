@@ -70,6 +70,7 @@ export function composeCore(o: ComposeOptions): Core {
   const runner = new AgentRunner(db, o.bus, journal, agents, usage, security)
   if (o.protectedPaths?.length) runner.protectedPaths = o.protectedPaths
   const missions = new MissionManager(db, o.bus, journal, agents, providers, usage, permissions, memory, runner, security)
+  agents.beforeDelete = (agentId) => missions.stopForAgent(agentId)
   const constellations = new ConstellationEngine(db, o.bus, journal, agents, missions, providers, o.worktreeRoot)
   const scheduler = new Scheduler(db, o.bus, journal, agents, missions, constellations, o.now)
   return { handle: o.handle, settings, journal, agents, providers, usage, permissions, memory, conversations, security, runner, missions, constellations, scheduler }

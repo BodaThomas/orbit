@@ -9,6 +9,7 @@ import { createCodexEngine } from '../main/core/engine/codex'
 import type { AgentEngine, EngineId } from '../main/core/engine/types'
 import { bwrapAvailable, bwrapSelfTest } from '../main/core/security/bwrap'
 import { fileCipher, RuntimeHost } from './host'
+import { loadIdentity } from './identity'
 import { MIN_NODE, PROTOCOL_VERSION, RUNTIME_VERSION } from './protocol'
 import { echoEngine } from './test-engine'
 
@@ -69,11 +70,18 @@ async function daemon() {
     if (stopping) return
     stopping = true
     host.log.info('arrêt demandé', { signal: sig })
-    void host.stop().then(() => process.exit(0))
+    // Non-zero after a crash, so that systemd's Restart=on-failure brings the service back.
+    void host.stop().then(() => process.exit(process.exitCode ?? 0))
   }
   process.on('SIGTERM', () => stop('SIGTERM'))
   process.on('SIGINT', () => stop('SIGINT'))
-  process.on('uncaughtException', (e) => host.log.error('exception non gérée', { error: e.stack ?? String(e) }))
+  // State may be inconsistent after an uncaught exception: exit and let systemd restart cleanly
+  // (missions in progress are then marked interrupted, never silently re-run).
+  process.on('uncaughtException', (e) => {
+    host.log.error('exception non gérée : arrêt pour redémarrage propre', { error: e.stack ?? String(e) })
+    process.exitCode = 1
+    stop('uncaughtException')
+  })
   process.on('unhandledRejection', (e) => host.log.error('promesse rejetée', { error: String(e) }))
 }
 
@@ -136,6 +144,13 @@ async function health() {
   try {
     const h = (await localCall('health')) as { ready: boolean; checks: { name: string; ok: boolean; detail: string }[]; version: string }
     out(`orbit-runtime ${h.version} · ${h.ready ? 'prêt' : 'NON PRÊT'}`)
+    // What Orbit asks you to compare when adding this machine.
+    try {
+      const id = readFileSync(join(home, 'identity', 'runtime.id'), 'utf8').trim()
+      out(`  Identité : ${id} · empreinte ${loadIdentity(readFileSync(join(home, 'identity', 'runtime.key'), 'utf8')).fingerprint}`)
+    } catch {
+      out('  Identité : illisible (lancez cette commande avec l’utilisateur du service)')
+    }
     for (const c of h.checks) out(`  ${c.ok ? '✓' : '✗'} ${c.name} — ${c.detail}`)
     process.exit(h.ready ? 0 : 1)
   } catch (e) {
@@ -208,7 +223,7 @@ ProtectClock=yes
 ProtectHostname=yes
 RestrictSUIDSGID=yes
 RestrictRealtime=yes
-RestrictNamespaces=~net cgroup
+RestrictNamespaces=~net
 LockPersonality=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
@@ -254,7 +269,8 @@ RestartSec=5
 TimeoutStopSec=30
 KillMode=mixed
 ${hardening}
-ReadWritePaths=${home} %h/.codex %h/.claude %h/.claude.json
+# « - » : an engine not installed yet must not keep the service from starting.
+ReadWritePaths=${home} -%h/.codex -%h/.claude -%h/.claude.json
 
 [Install]
 WantedBy=default.target`)

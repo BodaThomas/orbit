@@ -132,7 +132,9 @@ export class EventLog {
 
   /** Drops events older than `days` that every active client has already received. */
   prune(days: number): number {
-    const minCursor = (this.sqlite.prepare('SELECT MIN(cursor) AS c FROM rt_clients WHERE revoked_at IS NULL').get() as { c: number | null }).c ?? Number.MAX_SAFE_INTEGER
+    // A client away for more than 90 days no longer holds the log back: it gets a snapshot when it returns.
+    const activeSince = new Date(this.now() - 90 * 86400_000).toISOString()
+    const minCursor = (this.sqlite.prepare('SELECT MIN(cursor) AS c FROM rt_clients WHERE revoked_at IS NULL AND COALESCE(last_seen_at, created_at) >= ?').get(activeSince) as { c: number | null }).c ?? Number.MAX_SAFE_INTEGER
     const before = new Date(this.now() - days * 86400_000).toISOString()
     return this.sqlite.prepare('DELETE FROM rt_events WHERE at < ? AND seq <= ?').run(before, minCursor).changes
   }

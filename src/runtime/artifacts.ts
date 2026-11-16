@@ -48,16 +48,19 @@ export class ArtifactStore {
     return { ...meta, createdAt }
   }
 
-  hasFor(missionId: string): boolean {
-    return Boolean(this.sqlite.prepare('SELECT 1 FROM rt_artifacts WHERE mission_id = ? LIMIT 1').get(missionId))
+  /** Already collected for this mission (since `since`: the current execution, so a follow-up gets its own). */
+  hasFor(missionId: string, since?: string | null): boolean {
+    return since
+      ? Boolean(this.sqlite.prepare('SELECT 1 FROM rt_artifacts WHERE mission_id = ? AND created_at >= ? LIMIT 1').get(missionId, since))
+      : Boolean(this.sqlite.prepare('SELECT 1 FROM rt_artifacts WHERE mission_id = ? LIMIT 1').get(missionId))
   }
 
   /**
    * Called once when a mission ends: its report (final text) and the files it changed
    * inside its workspace (never outside, never through a symlink).
    */
-  collect(m: { id: string; agentId: string; result: string | null; workspace: string | null }, changedPaths: string[]): ArtifactMeta[] {
-    if (this.hasFor(m.id)) return []
+  collect(m: { id: string; agentId: string; result: string | null; workspace: string | null }, changedPaths: string[], executionStartedAt?: string | null): ArtifactMeta[] {
+    if (this.hasFor(m.id, executionStartedAt)) return []
     const out: ArtifactMeta[] = []
     const dir = join(this.root, m.id)
     mkdirSync(dir, { recursive: true, mode: 0o700 })
@@ -67,7 +70,8 @@ export class ArtifactStore {
       const base = { id, missionId: m.id, agentId: m.agentId, name, kind, size: data.length, sha256: sha256(data) }
       if (data.length > this.policy.maxFileBytes || missionBytes + data.length > this.policy.maxMissionBytes) return out.push(this.record({ ...base, status: 'skipped_size', relPath: null }))
       if (this.usedBytes() + data.length > this.policy.quotaBytes) return out.push(this.record({ ...base, status: 'skipped_quota', relPath: null }))
-      const rel = join(m.id, `${out.length + 1}-${safeName(name)}`)
+      // Unique per artifact: a follow-up's files never overwrite the previous execution's.
+      const rel = join(m.id, `${id}-${safeName(name)}`)
       writeFileSync(join(this.root, rel), data, { mode: 0o600 })
       missionBytes += data.length
       out.push(this.record({ ...base, status: 'stored', relPath: rel }))

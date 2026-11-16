@@ -20,7 +20,8 @@ interface TableRule {
   /** Columns never overwritten once the row exists. */
   immutable?: string[]
   /** Only these columns are updated, and only on existing rows owned by the machine. */
-  stateOnly?: { columns: string[]; ownerColumn: string }
+  /** `frozenWhen`: SQL condition under which Orbit's copy is not overwritten (e.g. during a transfer). */
+  stateOnly?: { columns: string[]; ownerColumn: string; frozenWhen?: string }
   /** Rename runtime columns. */
   rename?: Record<string, string>
   insertOnly?: boolean
@@ -38,7 +39,7 @@ const RULES: Record<string, TableRule> = {
   mission_dependencies: { to: 'mission_dependencies', key: ['mission_id', 'depends_on_mission_id'], insertOnly: true },
   execution_handoffs: { to: 'execution_handoffs', key: ['id'] },
   agent_workspaces: { to: 'agent_workspaces', key: ['id'] },
-  automation_definitions: { to: 'automation_definitions', key: ['id'], stateOnly: { columns: ['next_run_at', 'last_run_at', 'status'], ownerColumn: 'scheduler_owner' } },
+  automation_definitions: { to: 'automation_definitions', key: ['id'], stateOnly: { columns: ['next_run_at', 'last_run_at', 'status'], ownerColumn: 'scheduler_owner', frozenWhen: "owner_state = 'transferring'" } },
   automation_runs: { to: 'automation_runs', key: ['id'], marker: 'machine_id' },
   usage_records: { to: 'usage_records', key: ['id'], marker: 'machine_id' },
   activity_events: { to: 'activity_events', key: ['id'], insertOnly: true },
@@ -144,7 +145,9 @@ export class RemoteMirror {
     if (rule.stateOnly) {
       const set = rule.stateOnly.columns.filter((c) => c in row)
       if (!set.length) return
-      this.sqlite.prepare(`UPDATE ${rule.to} SET ${set.map((c) => `${c} = ?`).join(', ')} WHERE id = ? AND ${rule.stateOnly.ownerColumn} = ?`).run(...set.map((c) => row[c]), keyValues[0], machineId)
+      // While an automation moves, the releasing runtime reports it « paused »: that is not the user's choice.
+      const frozen = rule.stateOnly.frozenWhen ? ` AND NOT (${rule.stateOnly.frozenWhen})` : ''
+      this.sqlite.prepare(`UPDATE ${rule.to} SET ${set.map((c) => `${c} = ?`).join(', ')} WHERE id = ? AND ${rule.stateOnly.ownerColumn} = ?${frozen}`).run(...set.map((c) => row[c]), keyValues[0], machineId)
       return
     }
 
