@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Command } from 'cmdk'
-import { Activity, BarChart3, FlaskConical, Globe2, KeyRound, LayoutGrid, MessageCircle, Plus, Rocket, Search, Server, Settings, Users, Waypoints } from 'lucide-react'
+import { Activity, BarChart3, CalendarClock, FlaskConical, Globe2, KeyRound, LayoutGrid, Plus, Rocket, Search, Server, Settings, Users, Waypoints } from 'lucide-react'
 import { Kbd } from '@/components/ui/field'
 import { Dialog } from 'radix-ui'
 import { useDemoModeToggle } from '@/lib/demo-mode'
@@ -51,11 +51,10 @@ export function CommandPalette() {
               {!!agents.data?.length && (
                 <Command.Group heading="Compagnons" className={group}>
                   {agents.data.map((a) => (
-                    <Command.Item key={a.id} value={`compagnon ${a.name} ${a.role}`} className={item} onSelect={() => run(() => navigate(`/chat/${a.id}`))}>
+                    <Command.Item key={a.id} value={`compagnon ${a.name} ${a.role}`} className={item} onSelect={() => run(() => navigate(`/companions/${a.id}`))}>
                       <Companion appearance={a.appearance} size={22} />
                       <span className="text-fg">{a.name}</span>
                       <span className="truncate text-xs text-fg-3">{a.role}</span>
-                      <span className="ml-auto flex items-center gap-1 text-2xs text-fg-3"><MessageCircle className="!size-3" /> Discuter</span>
                     </Command.Item>
                   ))}
                 </Command.Group>
@@ -68,6 +67,7 @@ export function CommandPalette() {
                     ['/companions', 'Compagnons', Users],
                     ['/missions', 'Missions', Rocket],
                     ['/constellations', 'Constellations', Waypoints],
+                    ['/automations', 'Automatisations', CalendarClock],
                     ['/activity', 'Activité', Activity],
                     ['/analytics', 'Statistiques', BarChart3],
                     ['/machines', 'Machines', Server],

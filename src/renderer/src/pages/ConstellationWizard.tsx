@@ -3,7 +3,7 @@ import { ArrowLeft, ArrowRight, Check, Crown, FolderOpen, GitBranch, ShieldCheck
 import { DEFAULT_PERMISSIONS, PERMISSION_LABELS } from '@shared/catalog'
 import { ENGINE_INFO, isAgentEngine } from '@shared/engines'
 import type { PlanApprovalPolicy, AgentPermissions, ConstellationLimits, ConstellationMember } from '@shared/types'
-import { Page } from '@/components/shell/Page'
+import { Page, PageLoading } from '@/components/shell/Page'
 import { Button } from '@/components/ui/button'
 import { Badge, Input, Label, Segmented, Switch, Textarea } from '@/components/ui/field'
 import { call } from '@/lib/api'
@@ -117,7 +117,7 @@ export function ConstellationWizardPage({ constellationId }: { constellationId?:
       return agent ? { agent, role: m.role || agent.role, coordinator: m.agentId === d.coordinatorAgentId, state: 'idle' as const, caption: ENGINE_INFO[agent.providerId].label } : null
     })
     .filter((n): n is NonNullable<typeof n> => Boolean(n))
-  if (!loaded) return null
+  if (!loaded) return <PageLoading />
 
   return (
     <Page wide>

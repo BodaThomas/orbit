@@ -7,7 +7,7 @@ import { effectivePermissions } from '@shared/permissions-matrix'
 import { AUTONOMY_LABELS } from '@shared/permission-labels'
 import { missionCounts } from '@shared/stats'
 import type { Agent, AgentPermissions, EffectiveLevel, EffectivePermissionRow, MemoryKind } from '@shared/types'
-import { Page } from '@/components/shell/Page'
+import { Page, PageLoading } from '@/components/shell/Page'
 import { Button } from '@/components/ui/button'
 import { Badge, Switch, Tabs, Textarea } from '@/components/ui/field'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/overlay'
@@ -365,10 +365,13 @@ export function CompanionProfilePage({ agentId, tab }: { agentId: string; tab?: 
   const conversations = useConversations(agentId)
   const memory = useMemory(agentId)
   const usage = useUsage()
-  const current = TABS.find((t) => t.key === tab)?.key ?? 'conversations'
-  if (isLoading) return null
+  if (isLoading) return <PageLoading />
   if (!agent) return <Page><OrbitEmptyState title="Compagnon introuvable" body="Il a peut-être été supprimé." action={<Button variant="secondary" onClick={() => navigate('/companions')}>Voir tous les compagnons</Button>} /></Page>
   const provider = providers.data?.find((p) => p.id === agent.providerId)
+  // Agent engines work through missions only: a chat tab would be a dead end.
+  const isAgentEngine = ENGINE_INFO[agent.providerId].kind === 'agent'
+  const tabs = TABS.filter((t) => !(isAgentEngine && t.key === 'conversations'))
+  const current = tabs.find((t) => t.key === tab)?.key ?? tabs[0]!.key
   const running = missions.data?.find((m) => ACTIVE_MISSION_STATUSES.includes(m.status))
   const palette = PALETTES[agent.appearance.palette]
   const month = usage.data?.byAgentMonth.find((r) => r.agentId === agent.id)
@@ -435,11 +438,13 @@ export function CompanionProfilePage({ agentId, tab }: { agentId: string; tab?: 
             </div>
           </div>
           <div className="no-drag flex gap-2 self-start">
-            <Button variant="secondary" onClick={() => useUi.getState().openNewMission(agent.id)}>
-              <Rocket /> Mission
-            </Button>
-            <Button variant="primary" onClick={() => navigate(`/chat/${agent.id}`)}>
-              <MessageCircle /> Discuter
+            {!isAgentEngine && (
+              <Button variant="secondary" onClick={() => navigate(`/chat/${agent.id}`)}>
+                <MessageCircle /> Discuter
+              </Button>
+            )}
+            <Button variant="primary" onClick={() => useUi.getState().openNewMission(agent.id)}>
+              <Rocket /> Confier une mission
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -472,7 +477,7 @@ export function CompanionProfilePage({ agentId, tab }: { agentId: string; tab?: 
         className="no-drag mb-4"
         value={current}
         onChange={(k) => navigate(`/companions/${agent.id}/${k}`)}
-        options={TABS.map((t) => ({ value: t.key, label: t.label, count: counts[t.key] }))}
+        options={tabs.map((t) => ({ value: t.key, label: t.label, count: counts[t.key] }))}
       />
 
       <div className="grid grid-cols-[minmax(0,1fr)_296px] items-start gap-4">

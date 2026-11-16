@@ -1,3 +1,4 @@
+import { ENGINE_INFO } from '@shared/engines'
 import { Copy, MessageCircle, Pause, Play, Rocket, Trash2, UserRound } from 'lucide-react'
 import { STATUS_LABELS } from '@shared/catalog'
 import type { Agent } from '@shared/types'
@@ -16,15 +17,17 @@ export function CompanionContextItems({ agent, Item = ContextMenuItem, Separator
   const confirm = useConfirm()
   return (
     <>
-      <Item onSelect={() => navigate(`/chat/${agent.id}`)}>
-        <MessageCircle /> Ouvrir la conversation
-      </Item>
-      <Item onSelect={() => useUi.getState().openNewMission(agent.id)}>
-        <Rocket /> Nouvelle mission
-      </Item>
       <Item onSelect={() => navigate(`/companions/${agent.id}`)}>
         <UserRound /> Voir le profil
       </Item>
+      <Item onSelect={() => useUi.getState().openNewMission(agent.id)}>
+        <Rocket /> Confier une mission
+      </Item>
+      {ENGINE_INFO[agent.providerId].kind !== 'agent' && (
+        <Item onSelect={() => navigate(`/chat/${agent.id}`)}>
+          <MessageCircle /> Discuter
+        </Item>
+      )}
       <Separator />
       <Item onSelect={() => duplicate.mutate({ id: agent.id })}>
         <Copy /> Dupliquer
@@ -62,11 +65,11 @@ export function CompanionListItem({ agent, selected }: { agent: Agent; selected:
           tabIndex={0}
           aria-label={`${agent.name}, ${subtitle}`}
           aria-current={selected ? 'page' : undefined}
-          onClick={() => navigate(`/chat/${agent.id}`)}
+          onClick={() => navigate(`/companions/${agent.id}`)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault()
-              navigate(`/chat/${agent.id}`)
+              navigate(`/companions/${agent.id}`)
             }
           }}
           className={cn(
@@ -91,17 +94,19 @@ export function CompanionListItem({ agent, selected }: { agent: Agent; selected:
             >
               <Rocket className="size-3.5" />
             </button>
-            <button
-              aria-label={`Profil de ${agent.name}`}
-              title="Profil"
-              onClick={(e) => {
-                e.stopPropagation()
-                navigate(`/companions/${agent.id}`)
-              }}
-              className="flex size-6 items-center justify-center rounded-[6px] bg-elevated text-fg-2 shadow-[inset_0_0_0_1px_var(--color-line)] hover:text-fg"
-            >
-              <UserRound className="size-3.5" />
-            </button>
+            {ENGINE_INFO[agent.providerId].kind !== 'agent' && (
+              <button
+                aria-label={`Discuter avec ${agent.name}`}
+                title="Discuter"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  navigate(`/chat/${agent.id}`)
+                }}
+                className="flex size-6 items-center justify-center rounded-[6px] bg-elevated text-fg-2 shadow-[inset_0_0_0_1px_var(--color-line)] hover:text-fg"
+              >
+                <MessageCircle className="size-3.5" />
+              </button>
+            )}
           </div>
         </div>
       </ContextMenuTrigger>

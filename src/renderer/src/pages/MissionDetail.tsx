@@ -28,7 +28,7 @@ import {
   X,
 } from 'lucide-react'
 import type { Agent, ExecutionEvent, FileChange, FileInventory, LiveActivity, Mission, MissionExecution, ToolCall, ToolKind } from '@shared/types'
-import { Page } from '@/components/shell/Page'
+import { Page, PageLoading } from '@/components/shell/Page'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/field'
 import { cn } from '@/lib/cn'
@@ -341,8 +341,8 @@ export function MissionDetailPage({ missionId, focusApproval }: { missionId: str
     if (running) bottomRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' })
   }, [events.length, running])
 
-  if (q.isLoading) return null
-  if (!mission || !q.data) return <Page><OrbitEmptyState title="Mission introuvable" /></Page>
+  if (q.isLoading) return <PageLoading />
+  if (!mission || !q.data) return <Page><OrbitEmptyState title="Mission introuvable" body="Elle a peut-être été supprimée." action={<Button variant="secondary" onClick={() => navigate('/missions')}>Voir toutes les missions</Button>} /></Page>
   const { executions, toolCalls, fileChanges, inventories } = q.data
   const pending = approvals.data?.filter((a) => a.missionId === mission.id) ?? []
   const engine = mission.engine ? providers.data?.find((p) => p.id === mission.engine) : null
@@ -369,7 +369,9 @@ export function MissionDetailPage({ missionId, focusApproval }: { missionId: str
         </div>
         <div className="no-drag flex shrink-0 gap-2">
           {running && (
-            <Button variant="danger" disabled={remoteOffline} title={remoteOffline ? 'Serveur hors ligne : reconnectez-le pour agir.' : undefined} onClick={() => cancel.mutate({ id: mission.id })}>
+            <Button variant="danger" disabled={remoteOffline} title={remoteOffline ? 'Serveur hors ligne : reconnectez-le pour agir.' : undefined} onClick={async () => {
+                if (await confirm({ title: 'Arrêter la mission ?', body: 'Le travail en cours est interrompu. Les fichiers déjà modifiés restent en l’état.', confirm: 'Arrêter', cancel: 'Continuer la mission', danger: true })) cancel.mutate({ id: mission.id })
+              }}>
               <Square className="fill-current" /> Arrêter
             </Button>
           )}

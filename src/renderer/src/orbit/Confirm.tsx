@@ -6,6 +6,7 @@ interface ConfirmRequest {
   title: string
   body?: string
   confirm?: string
+  cancel?: string
   danger?: boolean
 }
 interface ConfirmState {
@@ -31,10 +32,11 @@ export function ConfirmHost() {
       {req && (
         <DialogContent title={req.title} description={req.body} className="w-[420px]" hideClose>
           <div className="flex justify-end gap-2 px-5 pt-2 pb-4">
-            <Button variant="ghost" onClick={() => close(false)}>
-              Annuler
+            {/* A stray Enter must never trigger a destructive action. */}
+            <Button variant="ghost" onClick={() => close(false)} autoFocus={req.danger}>
+              {req.cancel ?? 'Annuler'}
             </Button>
-            <Button variant={req.danger ? 'danger' : 'primary'} onClick={() => close(true)} autoFocus>
+            <Button variant={req.danger ? 'danger' : 'primary'} onClick={() => close(true)} autoFocus={!req.danger}>
               {req.confirm ?? 'Confirmer'}
             </Button>
           </div>

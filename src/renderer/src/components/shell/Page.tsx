@@ -56,3 +56,16 @@ export function SectionLabel({ children, action, className }: { children: React.
     </div>
   )
 }
+
+/** Shown while a page's data loads, so the window never flashes empty. */
+export function PageLoading() {
+  return (
+    <Page>
+      <div className="mb-5 space-y-2" aria-busy="true" aria-label="Chargement">
+        <div className="skeleton h-8 w-64 rounded-md" />
+        <div className="skeleton h-4 w-96 rounded-md" />
+      </div>
+      <div className="skeleton h-72 rounded-xl" />
+    </Page>
+  )
+}
