@@ -217,7 +217,9 @@ export class ConversationManager {
       this.agents.setStatus(job.agentId, 'available', null)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      flush('error', { error: msg })
+      // A refused answer is still billed: count it toward costs and budgets.
+      const cost = usage ? this.usage.recordChunk(job.agentId, job.providerId, job.model, usage, 'conversation') : null
+      flush('error', { error: msg, ...(usage ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, costUsd: cost?.costUsd ?? null, costKind: cost?.costKind ?? null } : {}) })
       this.journal.activity({ type: 'provider.error', level: 'error', agentId: job.agentId, conversationId: job.conversationId, title: `${adapter.name} : réponse interrompue`, detail: msg })
       this.agents.setStatus(job.agentId, 'error', msg.slice(0, 120))
     } finally {

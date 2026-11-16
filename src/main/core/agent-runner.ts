@@ -245,8 +245,8 @@ export class AgentRunner {
         .insert(approvalRequests)
         .values({ id, agentId: agent.id, missionId, executionId, toolCallId, kind: 'tool_use', summary, detail: ask.payload.reason ?? null, payload: ask.payload.grant ? { ...ask.payload, grant: { ...ask.payload.grant, workspace } } : ask.payload, status: 'pending', createdAt: nowIso() })
         .run()
-      event('approval', `Demande de validation : ${ask.summary}`, { approvalId: id, toolCallId })
-      this.journal.activity({ type: 'approval.requested', level: 'warning', agentId: agent.id, missionId, title: 'Validation demandée', detail: summary })
+      event('approval', `Demande d’approbation : ${ask.summary}`, { approvalId: id, toolCallId })
+      this.journal.activity({ type: 'approval.requested', level: 'warning', agentId: agent.id, missionId, title: 'Approbation demandée', detail: summary })
       this.journal.notify('approval', `${agent.name} demande votre accord`, ask.summary, `/missions/${missionId}?approval=${id}`)
       waiting++
       if (waiting === 1) job.onWaiting(true)
@@ -307,7 +307,20 @@ export class AgentRunner {
           effort: agent.effort,
           signal: job.signal,
         },
-        { emit: onEvent, requestApproval, autoAllowed },
+        {
+          emit: (e: EngineEvent) => {
+            try {
+              onEvent(e)
+            } catch (err) {
+              // Mission (or companion) deleted while the engine was still talking: drop the event
+              // instead of throwing out of the engine's stdout handler.
+              if (!this.db.select({ id: missions.id }).from(missions).where(eq(missions.id, missionId)).get()) return
+              throw err
+            }
+          },
+          requestApproval,
+          autoAllowed,
+        },
       )
     } finally {
       concurrent = concurrent || (this.activeWorkspaces.get(workspace) ?? 1) > 1 || this.workspaceEpoch.get(workspace) !== epoch

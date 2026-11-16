@@ -83,8 +83,15 @@ export function spawnLineProcess(opts: LineProcessOptions): LineProcess {
     if (exited) return
     exited = true
     live.delete(child)
-    // The leader is gone; make sure nothing it started survives.
-    killGroup(child, 'SIGKILL')
+    // The leader is gone; make sure nothing it started survives. Node sets `exitCode` before
+    // emitting `exit`, so killGroup() would skip the group: signal it directly.
+    if (child.pid != null) {
+      try {
+        process.kill(-child.pid, 'SIGKILL')
+      } catch {
+        /* group already empty */
+      }
+    }
     for (const l of exitListeners.splice(0)) l(reason, code)
   }
   child.on('error', (err: NodeJS.ErrnoException) => exit(err.code === 'ENOENT' ? `binaire ${opts.label} introuvable` : err.message, null))

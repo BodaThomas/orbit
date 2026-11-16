@@ -380,6 +380,8 @@ export function createCodexEngine(opts: CodexEngineOptions): AgentEngine {
       }
 
       const transport = makeTransport(ws, engineConfinement('codex', policy, { binary: resolveCodexBinary().path }))
+      // A crash after `turn/start` returned would otherwise leave the turn (and the mission) running forever.
+      transport.onExit((reason) => settle({ id: turnId ?? '', status: 'failed', error: { message: `Codex s’est arrêté pendant le tour : ${reason}` } } as Turn))
       let rpc: CodexRpc | null = null
       const onAbort = () => {
         if (rpc && threadId && turnId) void rpc.request('turn/interrupt', { threadId, turnId }).catch(() => undefined)

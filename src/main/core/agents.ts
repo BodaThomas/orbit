@@ -110,8 +110,12 @@ export class AgentManager {
     return agent
   }
 
+  /** Set by the composition: stops the companion's running work before its rows disappear. */
+  beforeDelete: ((agentId: string) => void) | null = null
+
   delete(id: string): void {
     const agent = this.get(id)
+    this.beforeDelete?.(id)
     this.db.delete(agents).where(eq(agents.id, id)).run()
     this.journal.activity({ type: 'agent.deleted', level: 'warning', title: `${agent.name} a quitté votre univers` })
     this.journal.audit({ actor: 'user', agentId: null, action: 'agent.delete', target: agent.name, allowed: true, reason: null })

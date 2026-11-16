@@ -70,6 +70,8 @@ export class MissionManager {
   private running = new Map<string, AbortController>()
   /** Missions admitted later (runtime at capacity), oldest first. */
   readonly deferred = new Map<string, { origin: 'user' | 'automation'; followUp?: string }>()
+  /** Follow-up prompts waiting for their start approval (resumed with that prompt once approved). */
+  private startFollowUps = new Map<string, string>()
   /** Orbit Desktop: routes runtime-owned missions to their machine. */
   remote: MissionRemote | null = null
   /** Orbit Runtime: machine-wide limits (concurrency, budgets). */
@@ -275,6 +277,8 @@ export class MissionManager {
       return this.get(id)
     }
     if (this.running.has(id)) throw new OrbitError('conflict', 'Cette mission est déjà en cours.')
+    // Never skip a start approval that is still waiting for the user's answer.
+    if (mission.status === 'approval_required' && this.pendingStartApproval(id)) throw new OrbitError('conflict', 'Répondez d’abord à la demande d’approbation en attente.')
     const agent = this.agents.get(mission.agentId)
     const engine = mission.engine ? this.providers.engine(mission.engine) : null
     if (mission.engine && !engine) throw new OrbitError('provider', 'Le moteur de cette mission n’est pas disponible.')
@@ -318,6 +322,9 @@ export class MissionManager {
         createdAt: nowIso(),
       }
       this.db.insert(approvalRequests).values(approval).run()
+      // A follow-up keeps its own prompt (and the previous result) once approved.
+      if (followUp) this.startFollowUps.set(id, followUp)
+      else this.startFollowUps.delete(id)
       this.agents.setStatus(agent.id, 'awaiting_approval', mission.title)
       this.journal.activity({ type: 'approval.requested', level: 'warning', agentId: agent.id, missionId: id, title: 'Approbation demandée', detail: approval.summary })
       this.journal.notify('approval', 'Approbation nécessaire', approval.summary, '/')
@@ -350,8 +357,26 @@ export class MissionManager {
     if (this.running.has(id)) throw new OrbitError('conflict', 'Le compagnon travaille encore sur cette mission.')
     if (mission.status === 'approval_required') throw new OrbitError('conflict', 'Répondez d’abord à la demande d’approbation en attente.')
     this.followUpGuard?.(mission)
+    return this.restartFrom(mission, () => this.start(id, origin, prompt))
+  }
+
+  /**
+   * Moves a finished mission back to « à faire » and starts it. If start() refuses (budget,
+   * missing key, folder…), the mission returns to where it was instead of staying « à faire ».
+   */
+  private restartFrom(mission: Mission, start: () => Mission): Mission {
+    const before = { status: mission.status, updatedAt: mission.updatedAt }
     if (mission.status !== 'todo') this.transition(mission, 'todo')
-    return this.start(id, origin, prompt)
+    try {
+      return start()
+    } catch (err) {
+      const now = this.db.select({ status: missions.status }).from(missions).where(eq(missions.id, mission.id)).get()
+      if (now?.status === 'todo' && before.status !== 'todo') {
+        this.db.update(missions).set({ status: before.status, updatedAt: before.updatedAt }).where(eq(missions.id, mission.id)).run()
+        this.bus.invalidate('missions')
+      }
+      throw err
+    }
   }
 
   cancel(id: string): Mission {
@@ -382,8 +407,7 @@ export class MissionManager {
 
   retry(id: string): Mission {
     const mission = this.get(id)
-    this.transition(mission, 'todo')
-    return this.start(id, 'user')
+    return this.restartFrom(mission, () => this.start(id, 'user'))
   }
 
   duplicate(id: string): Mission {
@@ -394,6 +418,11 @@ export class MissionManager {
   delete(id: string): void {
     this.runner.denyAllFor(id)
     this.running.get(id)?.abort()
+    this.deferred.delete(id)
+    this.startFollowUps.delete(id)
+    // Start approvals are not tied to the row by a foreign key: expire them, or the companion
+    // would show « approbation nécessaire » forever.
+    this.expireApprovals(id)
     this.db.delete(missions).where(eq(missions.id, id)).run()
     this.runner.grants.expireMission(id)
     this.bus.invalidate('missions', 'approvals')
@@ -444,9 +473,11 @@ export class MissionManager {
       if (!approve) this.journal.activity({ type: 'tool.denied', agentId: row.agentId, missionId: row.missionId, title: 'Action refusée', detail: row.summary })
     } else if (row.missionId && row.kind === 'mission_start') {
       const mission = this.get(row.missionId)
+      const followUp = this.startFollowUps.get(mission.id)
+      this.startFollowUps.delete(mission.id)
       if (approve && mission.status === 'approval_required') {
-        this.transition(mission, 'running', { startedAt: nowIso(), finishedAt: null, error: null, result: null })
-        void this.execute(mission.id)
+        this.transition(mission, 'running', { startedAt: followUp && mission.startedAt ? mission.startedAt : nowIso(), finishedAt: null, error: null, ...(followUp ? {} : { result: null }) })
+        void this.execute(mission.id, followUp).catch((err) => this.journal.activity({ type: 'mission.failed', level: 'error', missionId: mission.id, title: 'Erreur interne d’exécution', detail: String(err) }))
       } else if (!approve && mission.status === 'approval_required') {
         this.transition(mission, 'cancelled', { finishedAt: nowIso() })
         this.agents.setStatus(mission.agentId, 'available', null)
@@ -454,6 +485,19 @@ export class MissionManager {
     }
     this.bus.invalidate('approvals', 'missions')
     return toApproval(this.db.select().from(approvalRequests).where(eq(approvalRequests.id, id)).get()!)
+  }
+
+  /** Companion about to be deleted: no engine may keep working (or waiting for an answer) for it. */
+  stopForAgent(agentId: string): void {
+    const ids = this.db.select({ id: missions.id }).from(missions).where(eq(missions.agentId, agentId)).all().map((r) => r.id)
+    for (const id of ids) {
+      this.deferred.delete(id)
+      this.startFollowUps.delete(id)
+      const controller = this.running.get(id)
+      if (!controller) continue
+      this.runner.denyAllFor(id)
+      controller.abort()
+    }
   }
 
   cancelAll(): void {
@@ -660,6 +704,10 @@ export class MissionManager {
           if (Date.now() - lastFlush > OUTPUT_FLUSH_MS) flushOutput()
         } else if (chunk.type === 'usage') chunkUsage = chunk
       }
+    } catch (err) {
+      // A refusal is billed: its usage still counts toward costs and budgets.
+      if (chunkUsage) this.usage.recordChunk(agent.id, agent.providerId, agent.model, chunkUsage, 'mission')
+      throw err
     } finally {
       flushOutput()
     }
@@ -699,6 +747,16 @@ export class MissionManager {
     this.db.update(missions).set({ ...extra, status: to, updatedAt: nowIso() }).where(eq(missions.id, mission.id)).run()
     mission.status = to
     this.bus.invalidate('missions')
+  }
+
+  private pendingStartApproval(missionId: string): boolean {
+    return Boolean(
+      this.db
+        .select({ id: approvalRequests.id })
+        .from(approvalRequests)
+        .where(and(eq(approvalRequests.missionId, missionId), eq(approvalRequests.kind, 'mission_start'), eq(approvalRequests.status, 'pending')))
+        .get(),
+    )
   }
 
   private expireApprovals(missionId: string) {

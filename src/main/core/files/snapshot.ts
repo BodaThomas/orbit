@@ -81,9 +81,13 @@ async function gitSnapshot(ws: string, top: string): Promise<Snapshot> {
       const notes: string[] = []
       const after = await gitTree(ws)
       const changes: FileDelta[] = []
+      let truncated = 0
       if (after !== before) {
-        const status = await git(top, ['diff-tree', '-r', '--no-renames', '--name-status', before, after, '--', scope])
-        for (const line of status.split('\n').filter(Boolean).slice(0, 500)) {
+        // quotePath=false: accented names (résumé.md) stay readable instead of "r\303\251sum\303\251.md".
+        const status = await git(top, ['-c', 'core.quotePath=false', 'diff-tree', '-r', '--no-renames', '--name-status', before, after, '--', scope])
+        const lines = status.split('\n').filter(Boolean)
+        truncated = Math.max(0, lines.length - 500)
+        for (const line of lines.slice(0, 500)) {
           const [code, ...rest] = line.split('\t')
           const rel = rest.join('\t')
           const kind = code === 'A' ? 'add' : code === 'D' ? 'delete' : 'update'
@@ -93,9 +97,10 @@ async function gitSnapshot(ws: string, top: string): Promise<Snapshot> {
           changes.push({ path: join(top, rel), kind, diff })
         }
       }
-      let complete = true
+      let complete = truncated === 0
+      if (truncated) notes.push(`${truncated} autre${truncated > 1 ? 's' : ''} fichier${truncated > 1 ? 's' : ''} modifié${truncated > 1 ? 's' : ''} non détaillé${truncated > 1 ? 's' : ''} (plafond de 500).`)
       try {
-        const ignored = (await git(ws, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '--', '.'])).split('\n').filter(Boolean)
+        const ignored = (await git(ws,['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '--', '.'])).split('\n').filter(Boolean)
         if (ignored.length) {
           complete = false
           notes.push(`${ignored.length} élément${ignored.length > 1 ? 's' : ''} ignoré${ignored.length > 1 ? 's' : ''} par .gitignore (ex. ${ignored.slice(0, 2).join(', ')}) : non surveillé${ignored.length > 1 ? 's' : ''}.`)
