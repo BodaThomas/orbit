@@ -141,7 +141,23 @@ function cronDayMatches(c: CronSpec, y: number, mo: number, d: number): boolean 
 
 // Next occurrence
 
-export function validateRecurrence(r: Recurrence, tz: string): string | null {
+/**
+ * Shape check, then - when `now` is given (creating or editing an automation) - that the
+ * recurrence fires at least once more: `0 0 30 2 *` or a past one-shot would otherwise leave
+ * an « active » automation that never runs.
+ */
+export function validateRecurrence(r: Recurrence, tz: string, now?: number): string | null {
+  const shape = validateShape(r, tz)
+  if (shape || now === undefined) return shape
+  try {
+    if (nextOccurrence(r, tz, now)) return null
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+  return r.kind === 'once' ? 'Cette date est déjà passée : choisissez un moment à venir.' : 'Cette récurrence ne se produit jamais (par exemple un 30 février) : modifiez-la.'
+}
+
+function validateShape(r: Recurrence, tz: string): string | null {
   try {
     if (!isValidTimeZone(tz)) return `Fuseau horaire inconnu : ${tz}`
     switch (r.kind) {

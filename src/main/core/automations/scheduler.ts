@@ -1,4 +1,5 @@
-import { and, asc, desc, eq, gte, inArray, isNull, sum } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, inArray, isNull, lt, sum } from 'drizzle-orm'
+import { TERMINAL_RUN_STATUSES } from '@shared/constellation-states'
 import { TERMINAL_MISSION_STATUSES } from '@shared/mission-states'
 import { describeRecurrence, nextOccurrence, validateRecurrence, type Recurrence } from '@shared/schedule'
 import type { Automation, AutomationRun, AutomationTrigger, MissedPolicy, Mission } from '@shared/types'
@@ -49,6 +50,8 @@ const GRACE_MS = 2 * 60_000
 const TICK_MS = 15_000
 /** Event triggers: at most this many runs per automation per hour, then it pauses itself. */
 const MAX_EVENT_RUNS_PER_HOUR = 12
+/** A missed run waiting for confirmation expires (as a refusal) after this long. */
+const CONFIRMATION_TTL_MS = 24 * 3600_000
 
 /**
  * Persistent scheduler. Runs inside Orbit's main process: it keeps working while the window
@@ -191,10 +194,11 @@ export class Scheduler {
 
   // Commands
 
-  private validate(input: AutomationInput) {
+  /** `mustFire`: creating or editing here - the recurrence has to occur at least once more. */
+  private validate(input: AutomationInput, mustFire = false) {
     if (!input.recurrence && !input.triggers.length) throw new OrbitError('validation', 'Choisissez une récurrence ou un déclencheur.')
     if (input.recurrence) {
-      const err = validateRecurrence(input.recurrence, input.timezone)
+      const err = validateRecurrence(input.recurrence, input.timezone, mustFire ? this.now() : undefined)
       if (err) throw new OrbitError('validation', err)
     }
     if (input.targetKind === 'agent') this.agents.get(input.targetId)
@@ -202,7 +206,7 @@ export class Scheduler {
   }
 
   create(input: AutomationInput): Automation {
-    this.validate(input)
+    this.validate(input, true)
     const id = newId()
     const ts = nowIso()
     const next = input.recurrence ? nextOccurrence(input.recurrence, input.timezone, this.now()) : null
@@ -218,7 +222,7 @@ export class Scheduler {
   update(id: string, input: AutomationInput): Automation {
     const before = this.get(id)
     if (before.ownerState === 'transferring') throw new OrbitError('conflict', 'Transfert en cours : attendez sa confirmation avant de modifier cette automatisation.')
-    this.validate(input)
+    this.validate(input, true)
     const remote = before.schedulerOwner !== 'local'
     const next = input.recurrence ? nextOccurrence(input.recurrence, input.timezone, this.now()) : null
     this.db.transaction((tx) => {
@@ -315,8 +319,21 @@ export class Scheduler {
       return this.toRun(this.db.select().from(automationRuns).where(eq(automationRuns.id, runId)).get()!)
     }
     const a = this.get(r.automationId)
+    // Paused or handed to another scheduler since the question was asked: never launched from here.
+    if (a.status !== 'active' || a.schedulerOwner !== 'local' || a.ownerState !== 'active') {
+      this.closeRun(r.id, 'skipped', 'Non lancée : l’automatisation a été mise en pause ou transférée depuis.')
+      throw new OrbitError('conflict', `« ${a.name} » est en pause ou a été transférée : l’exécution manquée n’est pas lancée.`)
+    }
     this.launchInto(a, r.id)
     return this.toRun(this.db.select().from(automationRuns).where(eq(automationRuns.id, runId)).get()!)
+  }
+
+  /** A missed run nobody confirmed within 24 h expires as a refusal (docs/SCHEDULER.md). */
+  private expireConfirmations() {
+    const before = new Date(this.now() - CONFIRMATION_TTL_MS).toISOString()
+    for (const r of this.db.select().from(automationRuns).where(and(eq(automationRuns.status, 'pending_confirmation'), isNull(automationRuns.machineId), lt(automationRuns.createdAt, before))).all()) {
+      this.closeRun(r.id, 'skipped', 'Sans réponse sous 24 h : exécution manquée non lancée.')
+    }
   }
 
   // The clock
@@ -327,6 +344,7 @@ export class Scheduler {
     this.ticking = true
     try {
       this.refreshRunning()
+      this.expireConfirmations()
       const now = this.now()
       const due = this.db.select().from(automationDefinitions).where(and(eq(automationDefinitions.status, 'active'), OWNED)).all().filter((r) => r.nextRunAt && Date.parse(r.nextRunAt) <= now)
       for (const r of due) {
@@ -474,9 +492,10 @@ export class Scheduler {
       }
       if (r.constellationRunId) {
         const run = this.constellations.run(r.constellationRunId)
-        // Still working, or waiting for the user's decision: not settled yet.
-        if (['planning', 'ready', 'running', 'synthesizing', 'awaiting_approval'].includes(run.status)) return null
-        return { status: run.status === 'completed' ? 'done' : run.status === 'cancelled' ? 'cancelled' : run.status === 'paused' ? 'uncertain' : 'failed', note: run.error }
+        // Only a final state settles the run: paused / blocked / failed runs are resumable (the
+        // automation's maxDurationMin bounds how long it stays open, see refreshRunning).
+        if (!TERMINAL_RUN_STATUSES.includes(run.status)) return null
+        return { status: run.status === 'completed' ? 'done' : 'cancelled', note: run.error }
       }
     } catch {
       return { status: 'cancelled', note: 'Cible supprimée.' }
