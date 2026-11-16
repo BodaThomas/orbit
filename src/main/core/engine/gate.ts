@@ -54,7 +54,7 @@ export function createClaudeGate(o: {
       o.io.emit({ type: 'tool.completed', tool: { externalId: id, status: 'denied', output: 'Refusé par l’utilisateur.' } })
       return { decision: 'deny', reason: 'L’utilisateur a refusé cette action dans Orbit. Ne la retente pas ; propose une alternative ou termine.' }
     }
-    return { decision: 'allow', reason: 'Approuvé dans Orbit.' }
+    return { decision: 'allow', reason: 'Autorisé dans Orbit.' }
   }
 
   const decide = async (id: string, name: string, input: Record<string, unknown>, mayDefer: boolean, engineReason?: string): Promise<GateOutcome> => {

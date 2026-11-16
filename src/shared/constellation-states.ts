@@ -16,13 +16,13 @@ export function normalizeRunStatus(s: string): ConstellationRunStatus {
 
 export const RUN_STATUS_INFO: Record<ConstellationRunStatus, { label: string; tone: 'accent' | 'success' | 'danger' | 'warning' | 'neutral'; hint: string }> = {
   planning: { label: 'Planification', tone: 'accent', hint: 'Le coordinateur prépare le plan.' },
-  awaiting_approval: { label: 'Validation attendue', tone: 'warning', hint: 'Une décision de votre part est nécessaire pour continuer.' },
-  ready: { label: 'Prête', tone: 'accent', hint: 'Plan validé : les sous-missions vont démarrer.' },
+  awaiting_approval: { label: 'Attend votre accord', tone: 'warning', hint: 'Une décision de votre part est nécessaire pour continuer.' },
+  ready: { label: 'Plan validé', tone: 'accent', hint: 'Plan validé : les sous-missions vont démarrer.' },
   running: { label: 'En cours', tone: 'accent', hint: 'Des sous-missions sont en cours.' },
   synthesizing: { label: 'Synthèse', tone: 'accent', hint: 'Le coordinateur rédige la synthèse du tour.' },
   paused: { label: 'En pause', tone: 'warning', hint: 'Aucune nouvelle sous-mission ne démarre. Reprenez quand vous voulez.' },
   blocked: { label: 'Bloquée', tone: 'warning', hint: 'Une intervention est nécessaire.' },
-  failed: { label: 'Échec', tone: 'danger', hint: 'L’orchestration a échoué : une résolution est nécessaire.' },
+  failed: { label: 'Échec', tone: 'danger', hint: 'La mission collective a échoué : une résolution est nécessaire.' },
   completed: { label: 'Terminée', tone: 'success', hint: 'Toutes les étapes obligatoires sont terminées.' },
   cancelled: { label: 'Annulée', tone: 'neutral', hint: 'Arrêtée par l’utilisateur. L’historique est conservé.' },
 }

@@ -115,14 +115,14 @@ function Memory({ agent }: { agent: Agent }) {
             {MEMORY_KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
           </select>
           <label className="flex items-center gap-2 text-xs text-fg-2">
-            <Switch checked={share} onChange={setShare} label="Envoyer au fournisseur" /> Inclure dans le contexte envoyé au fournisseur
+            <Switch checked={share} onChange={setShare} label="Envoyer au moteur" /> Inclure dans le contexte envoyé au moteur
           </label>
           <Button size="sm" variant="primary" className="ml-auto" disabled={!text.trim() || create.isPending} onClick={() => create.mutate({ agentId: agent.id, kind, content: text.trim(), includeInContext: share })}>
             <Plus /> Ajouter
           </Button>
         </div>
       </div>
-      <p className="text-xs text-fg-3">Seuls les souvenirs marqués « contexte » sont transmis au fournisseur, jamais l’ensemble de la mémoire. Recherche textuelle locale ; la recherche sémantique viendra plus tard.</p>
+      <p className="text-xs text-fg-3">Seuls les souvenirs marqués « contexte » sont transmis au moteur, jamais l’ensemble de la mémoire. Recherche textuelle locale ; la recherche sémantique viendra plus tard.</p>
       {memory.data?.length === 0 && <OrbitEmptyState compact title="Mémoire vide" />}
       <div className="space-y-1.5">
         {memory.data?.map((m) => (
@@ -220,7 +220,7 @@ function Tools({ agent }: { agent: Agent }) {
           ))}
         </div>
         <p className="mt-2 text-2xs leading-relaxed text-fg-4">
-          Ces règles sont appliquées par Orbit dans le moteur (hook avant chaque outil), pas par le prompt. Le dossier autorisé n’est un vrai bac à sable que si l’isolation renforcée est active.{' '}
+          Ces règles sont appliquées par Orbit dans le moteur (hook avant chaque outil), pas par le prompt. Le dossier de travail n’est un vrai bac à sable que si l’isolation renforcée est active.{' '}
           <button className="text-accent hover:underline" onClick={() => navigate('/settings/security')}>Sécurité et niveaux d’isolation</button>
         </p>
       </div>

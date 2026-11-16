@@ -96,7 +96,7 @@ export function CompanionsPage() {
               all.length ? (
                 <Button variant="secondary" onClick={() => { setQ(''); setFilter('all') }}>Réinitialiser les filtres</Button>
               ) : (
-                <Button variant="primary" onClick={() => navigate('/companions/new')}><Plus /> Créer un compagnon</Button>
+                <Button variant="primary" onClick={() => navigate('/companions/new')}><Plus /> Nouveau compagnon</Button>
               )
             }
           />

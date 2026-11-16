@@ -62,7 +62,7 @@ export function OverviewMotion() {
         {upcoming.length ? (
           upcoming.map((a) => (
             <div key={a.id} className="flex items-center gap-2">
-              {a.schedulerOwner !== 'local' && <Server className="size-3 shrink-0 text-fg-4" aria-label="Sur un serveur" />}
+              {a.schedulerOwner !== 'local' && <Server className="size-3 shrink-0 text-fg-4" aria-label="Sur une machine" />}
               <span className="min-w-0 flex-1 truncate text-fg-2">{a.name}</span>
               <span className="shrink-0 text-2xs text-fg-3 tabular">{relative(a.nextRunAt)}</span>
             </div>
@@ -86,10 +86,10 @@ export function OverviewMotion() {
             const last = (missions.data ?? []).find((x) => x.remoteMachineId && x.status === 'done')
             return (
               <>
-                {approvals > 0 && <div className="text-2xs text-warning">{approvals} accord{approvals > 1 ? 's' : ''} demandé{approvals > 1 ? 's' : ''} par un serveur</div>}
+                {approvals > 0 && <div className="text-2xs text-warning">{approvals} accord{approvals > 1 ? 's' : ''} demandé{approvals > 1 ? 's' : ''} par une machine</div>}
                 {last && (
                   <button onClick={() => navigate(`/missions/${last.id}`)} className="block w-full truncate text-left text-2xs text-fg-4 hover:text-fg-2">
-                    Terminée sur serveur : {last.title}
+                    Terminée sur une machine : {last.title}
                   </button>
                 )}
               </>

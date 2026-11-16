@@ -22,7 +22,7 @@ export const ADAPTERS: Record<ProviderId, ProviderAdapter> = {
     defaultModels: anthropicAdapter.defaultModels,
     statusPage: anthropicAdapter.statusPage,
     notes:
-      'Moteur agent officiel d’Anthropic (outils Claude Code). Lit, modifie et exécute dans le dossier autorisé du compagnon ; chaque outil passe par la politique d’Orbit. Utilise votre clé API Anthropic. Coût estimé par le SDK au tarif public.',
+      'Moteur agent officiel d’Anthropic (outils Claude Code). Lit, modifie et exécute dans le dossier de travail du compagnon ; chaque outil passe par la politique d’Orbit. Utilise votre clé API Anthropic. Coût estimé par le SDK au tarif public.',
   }),
   codex: engineAdapter({
     id: 'codex',

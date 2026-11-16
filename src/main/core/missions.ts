@@ -278,7 +278,7 @@ export class MissionManager {
     }
     if (this.running.has(id)) throw new OrbitError('conflict', 'Cette mission est déjà en cours.')
     // Never skip a start approval that is still waiting for the user's answer.
-    if (mission.status === 'approval_required' && this.pendingStartApproval(id)) throw new OrbitError('conflict', 'Répondez d’abord à la demande d’approbation en attente.')
+    if (mission.status === 'approval_required' && this.pendingStartApproval(id)) throw new OrbitError('conflict', 'Répondez d’abord à la demande d’accord en attente.')
     const agent = this.agents.get(mission.agentId)
     const engine = mission.engine ? this.providers.engine(mission.engine) : null
     if (mission.engine && !engine) throw new OrbitError('provider', 'Le moteur de cette mission n’est pas disponible.')
@@ -288,7 +288,7 @@ export class MissionManager {
     if (engine && agent.runtime !== 'remote') this.checkWorkspace(mission.workspace, agent)
     if (agent.isolation === 'strict' && agent.runtime !== 'remote') {
       // Fail closed: never run « strict » silently in standard mode.
-      if (!engine?.capabilities.confinable) throw new OrbitError('forbidden', `L’isolation renforcée n’est pas disponible pour ${engine?.name ?? 'ce fournisseur'}.`)
+      if (!engine?.capabilities.confinable) throw new OrbitError('forbidden', `L’isolation renforcée n’est pas disponible pour ${engine?.name ?? 'ce moteur'}.`)
       if (this.security && !this.security.isolationProven()) throw new OrbitError('forbidden', 'Isolation renforcée demandée, mais l’auto-test de confinement a échoué sur ce Mac. Paramètres → Sécurité.')
     }
 
@@ -326,8 +326,8 @@ export class MissionManager {
       if (followUp) this.startFollowUps.set(id, followUp)
       else this.startFollowUps.delete(id)
       this.agents.setStatus(agent.id, 'awaiting_approval', mission.title)
-      this.journal.activity({ type: 'approval.requested', level: 'warning', agentId: agent.id, missionId: id, title: 'Approbation demandée', detail: approval.summary })
-      this.journal.notify('approval', 'Approbation nécessaire', approval.summary, '/')
+      this.journal.activity({ type: 'approval.requested', level: 'warning', agentId: agent.id, missionId: id, title: 'Accord demandé', detail: approval.summary })
+      this.journal.notify('approval', `${agent.name} attend votre accord`, approval.summary, `/missions/${id}`)
       this.bus.invalidate('approvals', 'missions')
       return this.get(id)
     }
@@ -355,7 +355,7 @@ export class MissionManager {
     // Constellation coordinators on a chat provider get their full context in the prompt itself.
     if (!mission.engine && !mission.constellationRunId) throw new OrbitError('validation', 'Seules les missions confiées à un moteur agent (Claude Code, Claude Agent SDK, Codex) peuvent être poursuivies.')
     if (this.running.has(id)) throw new OrbitError('conflict', 'Le compagnon travaille encore sur cette mission.')
-    if (mission.status === 'approval_required') throw new OrbitError('conflict', 'Répondez d’abord à la demande d’approbation en attente.')
+    if (mission.status === 'approval_required') throw new OrbitError('conflict', 'Répondez d’abord à la demande d’accord en attente.')
     this.followUpGuard?.(mission)
     return this.restartFrom(mission, () => this.start(id, origin, prompt))
   }
@@ -456,7 +456,7 @@ export class MissionManager {
       this.security?.audit({ agentId: row.agentId, missionId: row.missionId, layer: 'grant', action: `grant.${grant.scope}`, target: grant.label, decision: 'approved', reason: grant.scope === 'always' ? 'Toujours, pour ce compagnon et ce dossier' : 'Pour cette mission' })
       this.bus.invalidate('security')
     }
-    this.journal.activity({ type: 'approval.resolved', level: approve ? 'success' : 'info', agentId: row.agentId, missionId: row.missionId, title: approve ? 'Demande approuvée' : 'Demande refusée', detail: row.summary })
+    this.journal.activity({ type: 'approval.resolved', level: approve ? 'success' : 'info', agentId: row.agentId, missionId: row.missionId, title: approve ? 'Accord donné' : 'Accord refusé', detail: row.summary })
     if (row.kind === 'tool_use') {
       this.runner.resolveApproval(id, approve)
       // Same exact operation already waiting elsewhere: the new rule answers it too.
@@ -719,7 +719,7 @@ export class MissionManager {
 
   private requireWorkspace(agent: Agent): string {
     if (!agent.workingDirectory) {
-      throw new OrbitError('validation', `Choisissez d’abord le dossier autorisé de ${agent.name} (fiche du compagnon → Permissions).`)
+      throw new OrbitError('validation', `Choisissez d’abord le dossier de travail de ${agent.name} (fiche du compagnon → Permissions).`)
     }
     this.checkWorkspace(agent.workingDirectory, agent)
     return agent.workingDirectory
@@ -727,7 +727,7 @@ export class MissionManager {
 
   private checkWorkspace(workspace: string | null, agent: Agent) {
     if (!workspace || !existsSync(workspace) || !statSync(workspace).isDirectory()) {
-      throw new OrbitError('validation', `Le dossier autorisé de ${agent.name} est introuvable : ${workspace ?? 'aucun'}.`)
+      throw new OrbitError('validation', `Le dossier de travail de ${agent.name} est introuvable : ${workspace ?? 'aucun'}.`)
     }
     if (workspace === '/' || workspace === process.env.HOME) {
       throw new OrbitError('forbidden', 'Par sécurité, un compagnon ne peut pas travailler à la racine du disque ni dans tout votre dossier personnel. Choisissez un dossier de projet.')

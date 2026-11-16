@@ -82,7 +82,7 @@ describe('conversations', () => {
     const conv = c.conversations.create(a.id)
     c.conversations.send(conv.id, 'Premier')
     await waitFor(() => !c.conversations.isStreaming(conv.id))
-    expect(() => c.conversations.send(conv.id, 'Second')).toThrow(/Limite journalière/)
+    expect(() => c.conversations.send(conv.id, 'Second')).toThrow(/Budget journalier/)
   })
 })
 

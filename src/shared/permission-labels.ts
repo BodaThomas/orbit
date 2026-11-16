@@ -22,7 +22,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   'edit-config': 'Configuration exécutée par les tests',
   web: 'Accès web',
   mcp: 'Action externe (MCP)',
-  outside: 'Hors du dossier autorisé',
+  outside: 'Hors du dossier de travail',
   protected: 'Données protégées',
   command: 'Commande',
 }

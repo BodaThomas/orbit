@@ -180,7 +180,7 @@ export function ConstellationsPage() {
         </div>
       )}
       {unfinished.length > 0 && (
-        <Panel title={<span>Missions inachevées <span className="font-normal text-fg-3">· à reprendre, valider ou débloquer</span></span>} className="mb-4">
+        <Panel title={<span>À reprendre <span className="font-normal text-fg-3">· à reprendre, valider ou débloquer</span></span>} className="mb-4">
           <div className="space-y-px">
             {unfinished.map((r) => (
               <button key={r.id} onClick={() => navigate(`/constellations/runs/${r.id}`)} className="grid w-full grid-cols-[150px_minmax(0,1fr)_120px] items-center gap-3 rounded-[10px] px-3 py-2 text-left hover:bg-white/[0.03]">
@@ -196,7 +196,7 @@ export function ConstellationsPage() {
         </Panel>
       )}
       {(runs.data?.length ?? 0) > 0 && (
-        <Panel title="Exécutions récentes">
+        <Panel title="Missions collectives récentes">
           <div className="space-y-px">
             {runs.data!.slice(0, 20).map((r) => {
               const coord = byId.get(r.coordinatorAgentId)
@@ -205,7 +205,7 @@ export function ConstellationsPage() {
                   <Badge tone={RUN_STATUS[r.status].tone}>{RUN_STATUS[r.status].label}</Badge>
                   <span className="min-w-0">
                     <span className="block truncate text-[13px] text-fg">{r.goal.split('\n')[0]}</span>
-                    <span className="block truncate text-2xs text-fg-3">{r.constellationName} · coordination {coord?.name ?? '?'}{r.origin === 'automation' ? ' · automatisation' : ''}</span>
+                    <span className="block truncate text-2xs text-fg-3">{r.constellationName} · coordinateur {coord?.name ?? '?'}{r.origin === 'automation' ? ' · automatisation' : ''}</span>
                   </span>
                   <span className="text-right text-2xs text-fg-3 tabular">{compactNumber(r.tokens)} jetons · {duration(r.startedAt, r.finishedAt)}</span>
                   <span className="text-right text-2xs text-fg-3">{relative(r.createdAt)}</span>

@@ -18,7 +18,7 @@ import { useUi } from '@/stores/ui'
 const COLUMNS: { title: string; statuses: MissionStatus[] }[] = [
   { title: 'À faire', statuses: ['todo', 'scheduled'] },
   { title: 'En cours', statuses: ['running', 'waiting'] },
-  { title: 'À approuver', statuses: ['approval_required'] },
+  { title: 'Attend votre accord', statuses: ['approval_required'] },
   { title: 'Terminées', statuses: ['done'] },
   { title: 'Échecs & annulées', statuses: ['failed', 'cancelled'] },
 ]

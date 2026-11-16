@@ -43,7 +43,7 @@ export function CommandPalette() {
               <Command.Group heading="Actions" className={group}>
                 <Command.Item className={item} onSelect={() => run(() => useUi.getState().openNewMission(null))}><Rocket /> Nouvelle mission <span className="ml-auto"><Kbd>⌘N</Kbd></span></Command.Item>
                 <Command.Item className={item} onSelect={() => run(() => navigate('/companions/new'))}><Plus /> Nouveau compagnon <span className="ml-auto"><Kbd>⇧⌘N</Kbd></span></Command.Item>
-                <Command.Item className={item} onSelect={() => run(() => navigate('/settings/providers'))}><KeyRound /> Connecter un fournisseur</Command.Item>
+                <Command.Item className={item} onSelect={() => run(() => navigate('/settings/providers'))}><KeyRound /> Connecter un moteur</Command.Item>
                 <Command.Item className={item} onSelect={() => run(() => void demo.switchTo(boot.data?.settings.mode === 'demo' ? 'real' : 'demo'))}>
                   <FlaskConical /> {boot.data?.settings.mode === 'demo' ? 'Quitter le mode démo' : 'Ouvrir le mode démo'}
                 </Command.Item>

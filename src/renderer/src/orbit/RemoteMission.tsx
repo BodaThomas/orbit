@@ -54,7 +54,7 @@ export function ArtifactsPanel({ mission }: { mission: Mission }) {
   }
   return (
     <section className="rounded-xl bg-surface ring-1 ring-line">
-      <div className="flex h-10 items-center gap-1.5 px-4 text-xs font-medium text-fg-3"><Package className="size-3.5" /> Résultats conservés sur le serveur</div>
+      <div className="flex h-10 items-center gap-1.5 px-4 text-xs font-medium text-fg-3"><Package className="size-3.5" /> Résultats conservés sur la machine</div>
       <div className="space-y-0.5 px-2 pb-2">
         {list.data.map((a) => {
           const stored = a.status === 'stored'

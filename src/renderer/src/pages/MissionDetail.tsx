@@ -412,7 +412,7 @@ export function MissionDetailPage({ missionId, focusApproval }: { missionId: str
 
           {mission.description && (
             <section className="rounded-xl bg-surface p-5 ring-1 ring-line">
-              <div className="mb-2 text-xs font-medium text-fg-3">Brief</div>
+              <div className="mb-2 text-xs font-medium text-fg-3">Consigne</div>
               <p className="selectable text-[14px] leading-relaxed whitespace-pre-wrap text-fg-2">{mission.description}</p>
             </section>
           )}
@@ -506,7 +506,7 @@ export function MissionDetailPage({ missionId, focusApproval }: { missionId: str
             {mission.workspace && (
               <div className="mt-3 border-t border-line pt-3">
                 <div className="mb-1 flex items-center gap-1.5 text-2xs text-fg-3">
-                  <FolderOpen className="size-3" /> Dossier autorisé
+                  <FolderOpen className="size-3" /> Dossier de travail
                 </div>
                 <div className="font-mono text-[11.5px] break-all text-fg-2 selectable">{mission.workspace}</div>
                 {mission.sessionId && <div className="mt-2 font-mono text-2xs text-fg-4 selectable">session {mission.sessionId}</div>}
@@ -542,7 +542,7 @@ function ConstellationLink({ runId, coordinator }: { runId: string; coordinator:
   const info = RUN_STATUS_INFO[run.status]
   return (
     <button onClick={() => navigate(`/constellations/runs/${runId}`)} className="no-drag mb-4 flex w-full items-center gap-2 rounded-[12px] bg-white/[0.03] px-3 py-2 text-left text-[12.5px] ring-1 ring-line hover:bg-white/[0.05]">
-      <span className="text-fg-3">{coordinator ? 'Coordination de' : 'Sous-mission de'} « {run.constellationName} »</span>
+      <span className="text-fg-3">{coordinator ? 'Coordinateur de' : 'Sous-mission de'} « {run.constellationName} »</span>
       <Badge tone={info.tone}>Mission collective : {info.label.toLowerCase()}</Badge>
       <span className="min-w-0 flex-1 truncate text-fg-3">{q.data!.pendingPlan ? 'un plan attend votre validation' : `${q.data!.progress.done} / ${q.data!.progress.total} sous-missions terminées`}</span>
       <span className="text-fg-2">Ouvrir →</span>

@@ -207,14 +207,14 @@ export function evaluateTool(policy: RunPolicy, action: ToolAction): PolicyVerdi
     case 'read':
     case 'search': {
       if (!p.readFiles) return deny('read.disabled', 'read', 'Lecture de fichiers non autorisée pour ce compagnon.')
-      if (outside) return deny('read.outside', 'outside', `Hors du dossier autorisé : ${outside}`)
+      if (outside) return deny('read.outside', 'outside', `Hors du dossier de travail : ${outside}`)
       // Secrets need a human even for an automated companion.
       if (sensitive) return ask('read.sensitive', 'secrets', `Fichier sensible (secrets possibles) : ${sensitive}`, { key: `read:${relTo(workspace, sensitive)}`, label: `Lire ${relTo(workspace, sensitive)}`, max: 'mission' })
-      return allow('read.inside', 'read', 'Lecture dans le dossier autorisé.')
+      return allow('read.inside', 'read', 'Lecture dans le dossier de travail.')
     }
     case 'edit': {
       if (!p.writeFiles) return deny('edit.disabled', 'edit', 'Modification de fichiers non autorisée pour ce compagnon.')
-      if (outside) return deny('edit.outside', 'outside', `Hors du dossier autorisé : ${outside}`)
+      if (outside) return deny('edit.outside', 'outside', `Hors du dossier de travail : ${outside}`)
       const offScope = outsideScope(policy, paths)
       if (offScope) return scopeDenial(policy, offScope, 'edit.out-of-scope')
       const rels = paths.map((x) => relTo(workspace, x))
@@ -227,13 +227,13 @@ export function evaluateTool(policy: RunPolicy, action: ToolAction): PolicyVerdi
       const config = rels.find(buildExecPath)
       if (config && !automated && !contained)
         return ask('edit.build-exec', 'edit-config', `${config} décide de ce qu’exécutent les tests et la compilation, et les commandes de ce moteur ne sont pas confinées.`, { key, label, max: 'always' })
-      return allow('edit.inside', 'edit', 'Modification dans le dossier autorisé.', true)
+      return allow('edit.inside', 'edit', 'Modification dans le dossier de travail.', true)
     }
     case 'command':
       return evaluateCommand(policy, action, { automated, manual, contained })
     case 'web': {
       if (!p.network) return deny('web.disabled', 'web', 'Accès réseau non autorisé pour ce compagnon.')
-      if (automated) return allow('web.automated', 'web', 'Accès web (mode automatique).', true)
+      if (automated) return allow('web.automated', 'web', 'Accès web (mode automatisé).', true)
       const host = webScope(action)
       return ask('web.ask', 'web', 'Accès réseau.', { key: `web:${host}`, label: host === 'search' ? 'Recherches web' : `Pages web de ${host}`, max: 'always' })
     }
@@ -253,7 +253,7 @@ export function evaluateTool(policy: RunPolicy, action: ToolAction): PolicyVerdi
  */
 function evaluateAutonomous(policy: RunPolicy, action: ToolAction): PolicyVerdict {
   const { permissions: p, workspace } = policy
-  const auto = (rule: string, category: ActionCategory, reason: string, routine = true) => allow(`autonomous.${rule}`, category, `${reason} (autonomie complète)`, routine)
+  const auto = (rule: string, category: ActionCategory, reason: string, routine = true) => allow(`autonomous.${rule}`, category, `${reason} (mode autonome)`, routine)
   switch (action.kind) {
     case 'plan':
       return allow('plan', 'plan', 'Outil interne de planification.')
@@ -309,7 +309,7 @@ function evaluateCommand(policy: RunPolicy, action: ToolAction, m: { automated: 
   const command = action.command ?? ''
   const cwd = action.paths[0] && isInside(workspace, action.paths[0]) ? realResolve(workspace, action.paths[0]) : workspace
   const outsideCwd = action.paths.find((x) => !isInside(workspace, x))
-  if (outsideCwd) return deny('command.cwd-outside', 'outside', `Commande lancée hors du dossier autorisé : ${outsideCwd}`)
+  if (outsideCwd) return deny('command.cwd-outside', 'outside', `Commande lancée hors du dossier de travail : ${outsideCwd}`)
 
   const a = analyzeCommand(command, realRootOf(workspace), cwd)
   const key = `command:${normalizeCommand(command)}`
@@ -332,7 +332,7 @@ function evaluateCommand(policy: RunPolicy, action: ToolAction, m: { automated: 
 
   // 4. Outside the folder: written anywhere → human; read outside system folders → human.
   const outsideWrite = a.writes.find((x) => !isInside(workspace, x) && !isTempPath(x))
-  if (outsideWrite) return ask('command.write-outside', 'outside', `La commande écrit hors du dossier autorisé : ${outsideWrite}`)
+  if (outsideWrite) return ask('command.write-outside', 'outside', `La commande écrit hors du dossier de travail : ${outsideWrite}`)
   const offScope = outsideScope(policy, a.writes)
   if (offScope) return scopeDenial(policy, offScope, 'command.out-of-scope')
   const outsideRead = [...a.paths, ...absolutePathsIn(command)].find((x) => !isInside(workspace, x) && !isSystemPath(x))
@@ -353,7 +353,7 @@ function evaluateCommand(policy: RunPolicy, action: ToolAction, m: { automated: 
   // 7. Unknown effect.
   if (REVIEW.includes(cat)) {
     if (m.automated) {
-      const fallback = m.contained ? allow(`command.${cat}.contained`, cat, `${a.reason} Exécutée dans le bac à sable du moteur (mode automatique).`, true) : ask(`command.${cat}`, cat, a.reason, grantFor(cat))
+      const fallback = m.contained ? allow(`command.${cat}.contained`, cat, `${a.reason} Exécutée dans le bac à sable du moteur (mode automatisé).`, true) : ask(`command.${cat}`, cat, a.reason, grantFor(cat))
       return { ...fallback, engineMayDecide: true }
     }
     return ask(`command.${cat}`, cat, `${CATEGORY_LABELS[cat]} : ${a.reason}`, grantFor(cat))

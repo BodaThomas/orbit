@@ -72,7 +72,7 @@ function PlacementChip({ a, machines }: { a: Automation; machines: RemoteMachine
   const m = machines.find((x) => x.id === a.schedulerOwner)
   const online = m?.status === 'online'
   return (
-    <Tooltip content={online ? 'Planifiée et exécutée par le serveur, indépendamment de ce Mac.' : `Serveur injoignable : dernier état connu${m?.lastSyncedAt ? `, synchronisé ${relative(m.lastSyncedAt)}` : ''}. Le serveur continue de la déclencher s’il fonctionne.`}>
+    <Tooltip content={online ? 'Planifiée et exécutée par la machine, indépendamment de ce Mac.' : `Machine injoignable : dernier état connu${m?.lastSyncedAt ? `, synchronisé ${relative(m.lastSyncedAt)}` : ''}. Le serveur continue de la déclencher s’il fonctionne.`}>
       <span className={cn('flex items-center gap-1.5', online ? 'text-fg-2' : 'text-fg-3')}>
         <Server className="size-3.5 text-fg-3" /> {m?.name ?? 'Machine distante'}
         <span className={cn('size-1.5 rounded-full', online ? 'bg-success' : 'bg-fg-4')} />
@@ -102,7 +102,7 @@ function AutomationCard({ a }: { a: Automation }) {
   const moveTo = async (to: string, label: string) => {
     const ok = await confirm({
       title: `Planifier « ${a.name} » ${to === 'local' ? 'sur ce Mac' : `sur ${label}`} ?`,
-      body: to === 'local' ? `Le serveur arrête d’abord de la planifier, puis ce Mac la reprend à partir de maintenant (les occurrences du transfert ne sont pas rejouées). Elle ne s’exécutera ensuite que si Orbit est ouvert.` : `Orbit vérifie le serveur, enregistre l’automatisation là-bas et relit sa confirmation avant de désactiver ce Mac. En cas de doute, personne ne la déclenche jusqu’à la vérification suivante — jamais les deux à la fois.`,
+      body: to === 'local' ? `La machine arrête d’abord de la planifier, puis ce Mac la reprend à partir de maintenant (les occurrences du transfert ne sont pas rejouées). Elle ne s’exécutera ensuite que si Orbit est ouvert.` : `Orbit vérifie le serveur, enregistre l’automatisation là-bas et relit sa confirmation avant de désactiver ce Mac. En cas de doute, personne ne la déclenche jusqu’à la vérification suivante — jamais les deux à la fois.`,
       confirm: 'Transférer',
     })
     if (ok) transfer.mutate({ id: a.id, to })
@@ -164,7 +164,7 @@ function AutomationCard({ a }: { a: Automation }) {
               <DropdownMenuItem
                 disabled={transferring || ownerOffline}
                 onSelect={async () => {
-                  if (!a.sensitive || (await confirm({ title: `Exécuter « ${a.name} » maintenant ?`, body: 'La cible peut modifier des fichiers ou exécuter des commandes. Les approbations habituelles s’appliquent.', confirm: 'Exécuter' }))) runNow.mutate({ id: a.id })
+                  if (!a.sensitive || (await confirm({ title: `Exécuter « ${a.name} » maintenant ?`, body: 'La cible peut modifier des fichiers ou exécuter des commandes. Les demandes d’accord habituelles s’appliquent.', confirm: 'Exécuter' }))) runNow.mutate({ id: a.id })
                 }}
               >
                 <Play /> Exécuter maintenant
@@ -276,7 +276,7 @@ export function AutomationsPage({ focusRun }: { focusRun?: string | null }) {
               { icon: <Zap />, label: 'Déclencheurs' },
               { icon: <Power />, label: 'Pause à tout moment' },
             ]}
-            action={<Button variant="primary" onClick={() => navigate('/automations/new')}><Plus /> Créer une automatisation</Button>}
+            action={<Button variant="primary" onClick={() => navigate('/automations/new')}><Plus /> Nouvelle automatisation</Button>}
           />
         </div>
       ) : (
@@ -298,7 +298,7 @@ export function AutomationsPage({ focusRun }: { focusRun?: string | null }) {
             <section className="card p-4 text-[12.5px] leading-relaxed text-fg-3">
               <div className="mb-1.5 flex items-center gap-1.5 text-[13px] font-medium text-fg"><Clock className="size-3.5" /> Où et quand elles s’exécutent</div>
               <div className="mb-2 flex gap-2"><Laptop className="mt-0.5 size-3.5 shrink-0 text-fg-3" /><span><span className="text-fg-2">Ce Mac</span> — tant qu’Orbit est ouvert, même fenêtre fermée. Mac éteint ou en veille : rien ne s’exécute ; au retour, chaque exécution manquée suit la règle choisie.</span></div>
-              <div className="flex gap-2"><Server className="mt-0.5 size-3.5 shrink-0 text-fg-3" /><span><span className="text-fg-2">Serveur</span> — planifiée et exécutée par le runtime, indépendamment de ce Mac, tant que le serveur fonctionne. Chaque automatisation n’a qu’un seul planificateur.</span></div>
+              <div className="flex gap-2"><Server className="mt-0.5 size-3.5 shrink-0 text-fg-3" /><span><span className="text-fg-2">Machine</span> — planifiée et exécutée par le runtime, indépendamment de ce Mac, tant que le serveur fonctionne. Chaque automatisation n’a qu’un seul planificateur.</span></div>
               <label className="mt-3 flex items-center justify-between gap-2 text-fg-2">
                 Ouvrir Orbit à l’ouverture de session
                 <Switch
@@ -461,7 +461,7 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
         // The automation already exists here, so a failed transfer must not be retried as a new create.
         try {
           const moved = await call('automations.transfer', { id: saved.id, to: location })
-          toast.success(`« ${moved.name} » est planifiée ${location === 'local' ? 'sur ce Mac' : `sur ${locationMachine?.name ?? 'le serveur'}`}`)
+          toast.success(`« ${moved.name} » est planifiée ${location === 'local' ? 'sur ce Mac' : `sur ${locationMachine?.name ?? 'la machine'}`}`)
         } catch (err) {
           toast.error(`« ${saved.name} » est enregistrée sur ce Mac, mais le transfert a échoué : ${err instanceof Error ? err.message : String(err)}`)
         }
@@ -669,9 +669,9 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
             <p className="text-xs text-fg-3">
               {location === 'local'
                 ? placement && placement !== 'local'
-                  ? 'Le compagnon travaille sur un serveur, mais c’est ce Mac qui déclenchera la mission : il doit être allumé et Orbit ouvert. Choisissez le serveur pour qu’elle parte sans lui.'
+                  ? 'Le compagnon travaille sur une machine, mais c’est ce Mac qui déclenchera la mission : il doit être allumé et Orbit ouvert. Choisissez la machine pour qu’elle parte sans lui.'
                   : 'Nécessite que ce Mac soit allumé et Orbit ouvert (même fenêtre fermée).'
-                : 'Le serveur planifie et exécute l’automatisation lui-même, Mac éteint compris. Orbit retrouve l’historique et les résultats à la reconnexion.'}
+                : 'La machine planifie et exécute l’automatisation elle-même, Mac éteint compris. Orbit retrouve l’historique et les résultats à la reconnexion.'}
             </p>
           </div>,
         )}

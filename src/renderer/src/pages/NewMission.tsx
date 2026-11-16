@@ -32,7 +32,7 @@ export function NewMissionDialog() {
     },
   })
   const create = useAction('missions.create', {
-    success: (m) => (m.status === 'approval_required' ? 'Mission créée — approbation demandée' : m.status === 'running' ? 'Mission lancée' : 'Mission créée'),
+    success: (m) => (m.status === 'approval_required' ? 'Mission créée : elle attend votre accord' : m.status === 'running' ? 'Mission lancée' : 'Mission créée'),
     onSuccess: (m) => {
       useUi.getState().closeNewMission()
       navigate(`/missions/${m.id}`)
@@ -106,7 +106,7 @@ export function NewMissionDialog() {
                           <span className="flex -space-x-2">{members.slice(0, 4).map((a) => <Companion key={a!.id} appearance={a!.appearance} size={22} />)}</span>
                           <span className="min-w-0">
                             <span className="block truncate text-[13px] text-fg">{d.name}</span>
-                            <span className="block truncate text-2xs text-fg-3">Coordination : {agents.data?.find((a) => a.id === d.coordinatorAgentId)?.name}</span>
+                            <span className="block truncate text-2xs text-fg-3">Coordinateur : {agents.data?.find((a) => a.id === d.coordinatorAgentId)?.name}</span>
                           </span>
                         </button>
                       )
@@ -116,7 +116,7 @@ export function NewMissionDialog() {
               ) : (
                 <div className="rounded-[10px] bg-white/[0.025] px-3 py-3 text-[12.5px] text-fg-3 ring-1 ring-line">
                   Aucune constellation pour l’instant.{' '}
-                  <button type="button" className="text-accent hover:underline" onClick={() => { useUi.getState().closeNewMission(); navigate('/constellations/new') }}>Créer une constellation</button>
+                  <button type="button" className="text-accent hover:underline" onClick={() => { useUi.getState().closeNewMission(); navigate('/constellations/new') }}>Nouvelle constellation</button>
                 </div>
               )
             ) : (

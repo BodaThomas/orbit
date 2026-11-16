@@ -495,7 +495,7 @@ export class ConstellationEngine {
 
   private requireStatus(runId: string, allowed: ConstellationRunStatus[], what: string): ConstellationRun {
     const run = this.run(runId)
-    if (run.machineId && this.remote) throw new OrbitError('validation', 'Cette constellation est coordonnée par un serveur : cette action n’est pas encore disponible à distance. Vous pouvez l’annuler puis la relancer.')
+    if (run.machineId && this.remote) throw new OrbitError('validation', 'Cette constellation est coordonnée par une machine : cette action n’est pas encore disponible à distance. Vous pouvez l’annuler puis la relancer.')
     if (!allowed.includes(run.status)) throw new OrbitError('conflict', `${what} impossible : la constellation est « ${run.status} ».`)
     return run
   }
@@ -628,18 +628,18 @@ export class ConstellationEngine {
   approvePlan(runId: string, planId: string, hash?: string): ConstellationRun {
     const plan = this.planRow(runId, planId)
     if (plan.status === 'approved' && plan.decidedBy === 'user') return this.run(runId) // double click
-    this.requireStatus(runId, ['awaiting_approval', 'blocked', 'paused'], 'Approuver le plan')
+    this.requireStatus(runId, ['awaiting_approval', 'blocked', 'paused'], 'Valider le plan')
     if (this.active.has(runId)) throw new OrbitError('conflict', 'Cette constellation est déjà en cours.')
     if (plan.status !== 'proposed') throw new OrbitError('conflict', `Le plan v${plan.version} n’est plus en attente (${plan.status}).`)
-    if (hash && hash !== plan.hash) throw new OrbitError('conflict', 'Le plan a changé depuis son affichage : vérifiez la nouvelle version avant de l’approuver.')
-    if (plan.errors.length) throw new OrbitError('validation', `Ce plan ne peut pas être approuvé : ${plan.errors.join(' ')}`)
+    if (hash && hash !== plan.hash) throw new OrbitError('conflict', 'Le plan a changé depuis son affichage : vérifiez la nouvelle version avant de la valider.')
+    if (plan.errors.length) throw new OrbitError('validation', `Ce plan ne peut pas être validé : ${plan.errors.join(' ')}`)
     if (!plan.tasks.length) throw new OrbitError('validation', 'Ce plan ne contient aucune sous-mission : répondez aux questions du coordinateur.')
     const latest = this.plans(runId).filter((p) => p.status === 'proposed').at(-1)
     if (latest?.id !== planId) throw new OrbitError('conflict', 'Une version plus récente du plan attend votre validation.')
     // Re-validated now: companions, membership or permissions may have changed since.
     const v = this.revalidate(runId, plan.tasks)
     if (v.errors.length) throw new OrbitError('validation', `Plan devenu invalide : ${v.errors.join(' ')}`)
-    if (!this.log(runId, 'decision.approve', 'success', `Plan v${plan.version} approuvé par vous (${plan.tasks.length} sous-missions).`, { actor: 'user', key: `approve:${planId}`, data: { planId, hash: plan.hash } })) return this.run(runId)
+    if (!this.log(runId, 'decision.approve', 'success', `Plan v${plan.version} validé par vous (${plan.tasks.length} sous-missions).`, { actor: 'user', key: `approve:${planId}`, data: { planId, hash: plan.hash } })) return this.run(runId)
     this.markPlan(planId, 'approved', 'user')
     this.journal.audit({ actor: 'user', agentId: this.run(runId).coordinatorAgentId, action: 'constellation.plan.approve', target: `${runId}#v${plan.version}`, allowed: true, reason: plan.approvalReason })
     this.applyPlan(runId, this.plans(runId).find((p) => p.id === planId)!)
@@ -692,7 +692,7 @@ export class ConstellationEngine {
       if (attempted && attempted.agentId !== agentIdOf(r.assignee)) throw new OrbitError('validation', `« ${r.id} » a déjà été tentée par un autre compagnon : gardez-le, ou créez une nouvelle sous-mission avec un autre identifiant.`)
     }
     const v = this.revalidate(runId, records)
-    const plan = this.storePlan(runId, v, { source: 'user', round: Math.max(1, run.round), executionId: null, reason: 'Plan modifié par vous : vérifiez les différences puis approuvez.' })
+    const plan = this.storePlan(runId, v, { source: 'user', round: Math.max(1, run.round), executionId: null, reason: 'Plan modifié par vous : vérifiez les différences puis validez.' })
     this.log(runId, 'plan.edited', 'info', `Plan v${plan.version} rédigé par vous${v.errors.length ? ' (à corriger)' : ' : en attente de votre validation'}.`, { actor: 'user' })
     this.transition(runId, null, v.errors.length ? 'blocked' : 'awaiting_approval', { error: v.errors.length ? v.errors.join(' ') : null })
     return this.plans(runId).find((p) => p.id === plan.id)!
@@ -868,7 +868,7 @@ export class ConstellationEngine {
     const tasks = this.tasks(runId)
     // A new round once the previous one has fully run (or after a synthesis).
     const nextRound = phase === 'synthesizing' || (tasks.length > 0 && tasks.every((t) => TERMINAL_MISSION_STATUSES.includes(t.status))) ? Math.max(1, run.round) + 1 : Math.max(1, run.round)
-    if (o.recovered) this.log(runId, 'plan.recovered', 'warning', `Réponse de ${coordName} reçue après la fin de l’orchestration (discussion) : relue par Orbit.`, { data: { executionId } })
+    if (o.recovered) this.log(runId, 'plan.recovered', 'warning', `Réponse de ${coordName} reçue après la fin de la mission collective (discussion) : relue par Orbit.`, { data: { executionId } })
 
     if (via === 'coordinator' && phase === 'synthesizing' && o.canDelegate === false && !v.noDelegation && (v.tasks.length || v.errors.length)) {
       // Last round: no new delegation possible - the user decides whether to raise the limits.
@@ -1249,7 +1249,7 @@ export class ConstellationEngine {
       .catch((err) => {
         if (!this.disposed && !state.controller.signal.aborted) {
           const msg = err instanceof Error ? err.message : String(err)
-          this.log(runId, 'run.error', 'error', `Erreur d’orchestration : ${msg}`)
+          this.log(runId, 'run.error', 'error', `Erreur de la mission collective : ${msg}`)
           this.finishRun(runId, 'failed', null, msg)
         }
       })

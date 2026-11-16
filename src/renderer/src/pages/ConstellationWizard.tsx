@@ -214,7 +214,7 @@ export function ConstellationWizardPage({ constellationId }: { constellationId?:
                       <CompanionAvatar appearance={a.appearance} size={28} />
                       <span className="text-[13.5px] font-medium text-fg">{a.name}</span>
                       <span className="text-2xs text-fg-3">{ENGINE_INFO[a.providerId].label}</span>
-                      {coord && <Badge tone="accent">Coordination</Badge>}
+                      {coord && <Badge tone="accent">Coordinateur</Badge>}
                     </div>
                     <div className="grid grid-cols-[180px_1fr] gap-2">
                       <Input value={m.role} onChange={(e) => setMember(m.agentId, { role: e.target.value })} placeholder="Rôle" maxLength={80} />
@@ -276,7 +276,7 @@ export function ConstellationWizardPage({ constellationId }: { constellationId?:
                     </div>
                   ))}
                 </div>
-                <p className="mt-2 flex gap-2 text-xs text-fg-3"><ShieldCheck className="mt-0.5 size-3.5 shrink-0" />Chaque action reste soumise aux règles et approbations habituelles du compagnon qui l’exécute.</p>
+                <p className="mt-2 flex gap-2 text-xs text-fg-3"><ShieldCheck className="mt-0.5 size-3.5 shrink-0" />Chaque action reste soumise aux règles et demandes d’accord habituelles du compagnon qui l’exécute.</p>
               </div>
             </div>
           )}
@@ -327,7 +327,7 @@ export function ConstellationWizardPage({ constellationId }: { constellationId?:
               <div className="divide-y divide-line rounded-[12px] bg-white/[0.02] text-[13px] ring-1 ring-line">
                 {[
                   ['Nom', d.name || '—'],
-                  ['Coordination', coordinator ? `${coordinator.name} · ${ENGINE_INFO[coordinator.providerId].label}${d.members.find((m) => m.agentId === coordinator.id)?.canDelegate ? '' : ' · délégation désactivée'}` : '—'],
+                  ['Coordinateur', coordinator ? `${coordinator.name} · ${ENGINE_INFO[coordinator.providerId].label}${d.members.find((m) => m.agentId === coordinator.id)?.canDelegate ? '' : ' · délégation désactivée'}` : '—'],
                   ['Membres', d.members.filter((m) => m.agentId !== d.coordinatorAgentId).map((m) => `${byId.get(m.agentId)?.name} (${m.role || '—'})`).join(', ') || '—'],
                   ['Moteurs', [...new Set(d.members.map((m) => ENGINE_INFO[byId.get(m.agentId)?.providerId ?? 'demo'].label))].join(' · ')],
                   ['Dossier', d.workspace ?? 'Dossier de chaque compagnon'],

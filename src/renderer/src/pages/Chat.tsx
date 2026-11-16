@@ -306,7 +306,7 @@ export function ChatPage({ agentId, conversationId }: { agentId: string; convers
             <div className="mx-auto flex max-w-[760px] items-center gap-3 rounded-[14px] bg-surface px-4 py-3 ring-1 ring-line">
               <Rocket className="size-4 shrink-0 text-accent" />
               <div className="min-w-0 flex-1 text-[13px] leading-snug text-fg-2">
-                {agent.name} travaille avec <span className="text-fg">{provider.name}</span> : il agit dans {agent.workingDirectory ? <span className="font-mono text-xs text-fg">{agent.workingDirectory}</span> : 'son dossier autorisé'} au fil de missions, que vous pouvez suivre et poursuivre.
+                {agent.name} travaille avec <span className="text-fg">{provider.name}</span> : il agit dans {agent.workingDirectory ? <span className="font-mono text-xs text-fg">{agent.workingDirectory}</span> : 'son dossier de travail'} au fil de missions, que vous pouvez suivre et poursuivre.
               </div>
               <Button size="sm" variant="primary" onClick={() => useUi.getState().openNewMission(agent.id)}>
                 Confier une mission

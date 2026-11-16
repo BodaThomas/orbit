@@ -98,7 +98,7 @@ export class ProviderRegistry {
    */
   async testEngine(id: ProviderId): Promise<{ ok: boolean; text: string; model: string | null; durationMs: number; error: string | null; deniedTools: number }> {
     const engine = this.engine(id)
-    if (!engine) throw new OrbitError('validation', 'Ce fournisseur n’est pas un moteur agent.')
+    if (!engine) throw new OrbitError('validation', 'Ce moteur n’est pas un moteur agent.')
     const adapter = this.adapter(id)
     const ws = mkdtempSync(join(tmpdir(), 'orbit-engine-test-'))
     const t0 = Date.now()
@@ -149,7 +149,7 @@ export class ProviderRegistry {
 
   info(id: ProviderId): ProviderInfo {
     const info = this.list().find((p) => p.id === id)
-    if (!info) throw new OrbitError('not_found', 'Fournisseur inconnu.')
+    if (!info) throw new OrbitError('not_found', 'Moteur inconnu.')
     return info
   }
 

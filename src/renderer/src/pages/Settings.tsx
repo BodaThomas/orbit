@@ -19,7 +19,7 @@ import { toast } from 'sonner'
 
 const SECTIONS = [
   { key: 'general', label: 'Général', icon: SlidersHorizontal },
-  { key: 'providers', label: 'Fournisseurs', icon: KeyRound },
+  { key: 'providers', label: 'Moteurs', icon: KeyRound },
   { key: 'budgets', label: 'Budgets', icon: Wallet },
   { key: 'notifications', label: 'Notifications', icon: Bell },
   { key: 'security', label: 'Sécurité & audit', icon: ShieldCheck },
@@ -123,7 +123,7 @@ export function ProviderConnect({ provider, compact }: { provider: ProviderInfo;
               {save.isPending ? 'Vérification…' : 'Connecter'}
             </Button>
           </form>
-          <p className="mt-1.5 text-2xs text-fg-4">La clé est vérifiée auprès du fournisseur puis chiffrée via le Trousseau macOS. Elle ne quitte jamais le processus principal d’Orbit.</p>
+          <p className="mt-1.5 text-2xs text-fg-4">La clé est vérifiée auprès du service puis chiffrée via le Trousseau macOS. Elle ne quitte jamais le processus principal d’Orbit.</p>
         </div>
       )}
     </div>
@@ -143,7 +143,7 @@ function securityDecision(action: string, decision: string): { label: string; to
     case 'ask':
       return { label: 'demandé', tone: 'warning' }
     case 'approved':
-      return { label: 'approuvé', tone: 'success' }
+      return { label: 'autorisé', tone: 'success' }
     case 'allow':
       return { label: 'autorisé', tone: 'success' }
     case 'auto':
@@ -158,8 +158,8 @@ const AUDIT_ACTIONS: Record<string, string> = {
   'agent.delete': 'Compagnon supprimé',
   'agent.update': 'Compagnon modifié',
   'app.launchAtLogin': 'Ouverture à la connexion',
-  'approval.approve': 'Approbation accordée',
-  'approval.deny': 'Approbation refusée',
+  'approval.approve': 'Accord donné',
+  'approval.deny': 'Accord refusé',
   'automation.create': 'Automatisation créée',
   'automation.pause': 'Automatisation en pause',
   'automation.resume': 'Automatisation reprise',
@@ -167,7 +167,7 @@ const AUDIT_ACTIONS: Record<string, string> = {
   claudeLocalLogs: 'Journaux locaux de Claude',
   'constellation.create': 'Constellation créée',
   'constellation.limits': 'Limites de constellation',
-  'constellation.plan.approve': 'Plan approuvé',
+  'constellation.plan.approve': 'Plan validé',
   'engine.test': 'Test du moteur',
   'grant.always': 'Autorisation permanente',
   'grant.mission': 'Autorisation pour la mission',
@@ -204,7 +204,7 @@ function SecurityLevels() {
     <>
       <div className="px-1 text-xs font-medium text-fg-3">Niveaux de sécurité des compagnons</div>
       <Card>
-        <Row title="Niveau 1 · Politique d’Orbit" body="Chaque action d’un moteur est évaluée par Orbit avant de s’exécuter (hook PreToolUse pour Claude, demandes d’approbation pour Codex) : dossier autorisé, chemins relatifs et liens symboliques résolus, fichiers sensibles, commandes analysées selon leurs arguments et leurs effets (sous-shells compris). Les actions courantes passent sans vous déranger en mode supervisé ; les actions sensibles vous sont soumises. Une commande shell reste en partie opaque : ce niveau ne garantit pas l’isolation.">
+        <Row title="Niveau 1 · Politique d’Orbit" body="Chaque action d’un moteur est évaluée par Orbit avant de s’exécuter (hook PreToolUse pour Claude, demandes d’accord pour Codex) : dossier de travail, chemins relatifs et liens symboliques résolus, fichiers sensibles, commandes analysées selon leurs arguments et leurs effets (sous-shells compris). Les actions courantes passent sans vous déranger en mode supervisé ; les actions sensibles vous sont soumises. Une commande shell reste en partie opaque : ce niveau ne garantit pas l’isolation.">
           <Badge tone="success">Toujours actif</Badge>
         </Row>
         <Row title="Niveau 2 · Bac à sable du moteur" body="Codex : Seatbelt en lecture seule (supervisé) ou écriture limitée au dossier, réseau coupé sans permission. Claude : outils retirés, lecture confinée aux dossiers de travail, commandes dans le bac à sable de Claude Code. Ces bacs à sable limitent l’écriture et le réseau, pas toutes les lectures.">
@@ -327,7 +327,7 @@ export function SettingsPage({ section }: { section?: string }) {
 
           {current === 'budgets' && (
             <Card>
-              <Row title="Limite journalière" body="Au-delà, Orbit bloque les nouvelles conversations et missions. Basée sur les coûts connus (officiels + estimés).">
+              <Row title="Budget journalier" body="Au-delà, Orbit bloque les nouvelles conversations et missions. Basée sur les coûts connus (officiels + estimés).">
                 <div className="flex gap-2">
                   <Input type="number" min={0} step={1} value={daily} onChange={(e) => setDaily(e.target.value)} placeholder="Aucune" className="w-28 tabular" />
                   <Button variant="secondary" onClick={() => update.mutate({ dailyLimitUsd: daily === '' ? null : Number(daily) })}>Appliquer</Button>
@@ -348,7 +348,7 @@ export function SettingsPage({ section }: { section?: string }) {
           {current === 'notifications' && (
             <>
               <Card>
-                <Row title="Notifications macOS" body="Missions terminées ou échouées, approbations, budgets, incidents fournisseurs.">
+                <Row title="Notifications macOS" body="Missions terminées ou échouées, demandes d’accord, budgets, incidents des moteurs.">
                   <Switch checked={s.nativeNotifications} onChange={(v) => update.mutate({ nativeNotifications: v })} label="Notifications macOS" />
                 </Row>
               </Card>
@@ -406,7 +406,7 @@ export function SettingsPage({ section }: { section?: string }) {
                   <FlaskConical /> {s.mode === 'demo' ? 'Revenir à mes données' : 'Ouvrir la démo'}
                 </Button>
               </Row>
-              <Row title="Emplacement des données" body="SQLite local. Rien n’est envoyé ailleurs que vers les fournisseurs que vous connectez.">
+              <Row title="Emplacement des données" body="SQLite local. Rien n’est envoyé ailleurs que vers les moteurs que vous connectez.">
                 <span className="selectable max-w-80 truncate font-mono text-xs text-fg-3">{boot.data?.dataPath}</span>
               </Row>
               <Row title="Revoir l’accueil" body="Relance immédiatement l’écran d’accueil. Vos compagnons et vos données sont conservés.">
