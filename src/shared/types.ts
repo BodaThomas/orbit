@@ -542,6 +542,22 @@ export interface AgentMemory {
 
 // Notifications & machines
 
+/** One thing waiting for the user, gathered from approvals, team missions, automations and failures. */
+export interface InboxItem {
+  /** Stable key, also used to mark the item as handled. */
+  key: string
+  kind: 'approval' | 'plan' | 'run_blocked' | 'run_failed' | 'automation_confirm' | 'automation_failed' | 'mission_failed'
+  /** Id of the underlying record (approval, run, mission…). */
+  refId: string
+  title: string
+  detail: string | null
+  agentId: string | null
+  route: string
+  createdAt: string
+  /** Failures can be marked as handled; decisions disappear once taken. */
+  dismissible: boolean
+}
+
 export interface OrbitNotification {
   id: string
   kind: 'mission_done' | 'mission_failed' | 'approval' | 'budget' | 'provider' | 'agent' | 'machine'

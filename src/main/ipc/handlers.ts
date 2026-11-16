@@ -74,6 +74,9 @@ export const handlers: Handlers = {
   'missions.duplicate': (i, h) => h.runtime().missions.duplicate(i.id),
   'missions.delete': (i, h) => h.runtime().missions.delete(i.id),
 
+  'inbox.list': (_i, h) => h.runtime().inbox.list(),
+  'inbox.dismiss': (i, h) => h.runtime().inbox.dismiss(i.keys),
+
   'approvals.list': (i, h) => h.runtime().missions.approvals(i.status),
   'approvals.resolve': (i, h) => h.runtime().missions.resolveApproval(i.id, i.approve, i.scope),
   'permissions.grants': (i, h) => h.runtime().runner.grants.list({ agentId: i.agentId, includeRevoked: i.includeRevoked }),

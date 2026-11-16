@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { AlertTriangle, ArrowRight, CheckCircle2, Plus, Rocket, ShieldCheck } from 'lucide-react'
+import { CheckCircle2, Plus, Rocket, ShieldCheck } from 'lucide-react'
 import { ACTIVE_MISSION_STATUSES } from '@shared/mission-states'
 import { Page, PageHeader, Panel, PanelLink } from '@/components/shell/Page'
 import { Button } from '@/components/ui/button'
@@ -8,10 +8,10 @@ import { Skeleton } from '@/components/ui/field'
 import { longDate, greeting, relative, money, moneyParts, integer, pricedCost } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import { useCompanionStates } from '@/lib/companion-state'
-import { useActivity, useAgents, useApprovals, useBootstrap, useMissions, useProviders, useUsage } from '@/lib/queries'
+import { useActivity, useAgents, useBootstrap, useInbox, useMissions, useProviders, useUsage } from '@/lib/queries'
 import { ActivityEventRow } from '@/orbit/ActivityEvent'
 import { OverviewMotion } from '@/orbit/OverviewMotion'
-import { ApprovalRequestCard } from '@/orbit/ApprovalRequest'
+import { InboxList } from '@/orbit/InboxList'
 import { CompanionAvatar } from '@/orbit/CompanionAvatar'
 import { CompanionCard } from '@/orbit/CompanionCard'
 import { OrbitEmptyState } from '@/orbit/EmptyState'
@@ -57,7 +57,7 @@ export function OverviewPage() {
   const boot = useBootstrap()
   const agents = useAgents()
   const missions = useMissions()
-  const approvals = useApprovals()
+  const inbox = useInbox()
   const activity = useActivity({ limit: 9 })
   const providers = useProviders()
   const usage = useUsage()
@@ -71,12 +71,13 @@ export function OverviewPage() {
   const team = useCompanionStates()
   const workingAgents = list.filter((a) => ['in_mission', 'awaiting_approval'].includes(team.stateOf(a.id)))
   const working = team.counts.inMission
-  const failing = (missions.data ?? []).filter((m) => m.status === 'failed').slice(0, 3)
   const recent = (missions.data ?? []).slice(0, 5)
   const running = team.missions.active
   const currentMission = (agentId: string) => (missions.data ?? []).find((m) => m.agentId === agentId && ACTIVE_MISSION_STATUSES.includes(m.status))
-  const pendingApprovals = approvals.data?.length ?? 0
-  const todo = pendingApprovals + failing.length
+  const inboxItems = inbox.data ?? []
+  const todo = inboxItems.length
+  const decisions = inboxItems.filter((i) => !i.dismissible).length
+  const failures = todo - decisions
   const u = usage.data
   const today = u?.today
   // null: only subscription or unpriced requests today - no dollar amount to show.
@@ -153,7 +154,7 @@ export function OverviewPage() {
                 ))}
               </span>
             </PulseCell>
-            <PulseCell label="À traiter" foot={todo ? [pendingApprovals && `${pendingApprovals} accord${pendingApprovals > 1 ? 's' : ''} demandé${pendingApprovals > 1 ? 's' : ''}`, failing.length && `${failing.length} échec${failing.length > 1 ? 's' : ''}`].filter(Boolean).join(' · ') : 'Tout est en ordre'}>
+            <PulseCell label="À traiter" foot={todo ? [decisions && `${decisions} décision${decisions > 1 ? 's' : ''}`, failures && `${failures} échec${failures > 1 ? 's' : ''}`].filter(Boolean).join(' · ') : 'Tout est en ordre'}>
               <span className={cn('text-[22px] leading-7 font-semibold tracking-[-0.02em] tabular', todo ? 'text-warning' : 'text-fg')}>{todo}</span>
               {todo ? <span className="orbit-blip mb-2 size-2 rounded-full bg-warning" /> : <CheckCircle2 className="mb-1 size-4 text-success" />}
             </PulseCell>
@@ -210,31 +211,7 @@ export function OverviewPage() {
                   </span>
                 }
               >
-                {todo === 0 ? (
-                  <div className="mx-1 mb-1 flex items-center gap-3 rounded-[11px] bg-success/[0.04] px-3 py-2.5 ring-1 ring-success/10">
-                    <span className="flex size-7 items-center justify-center rounded-full bg-success/10">
-                      <CheckCircle2 className="size-4 text-success" />
-                    </span>
-                    <span>
-                      <span className="block text-[13px] text-fg">Tout est en ordre</span>
-                      <span className="block text-[12px] text-fg-3">Aucune demande d’accord ni erreur en attente.</span>
-                    </span>
-                  </div>
-                ) : (
-                  <div className="space-y-1.5 px-0.5 pb-0.5">
-                    {approvals.data?.map((a) => <ApprovalRequestCard key={a.id} approval={a} agent={byId.get(a.agentId)} />)}
-                    {failing.map((m) => (
-                      <button key={m.id} onClick={() => navigate(`/missions/${m.id}`)} className="group flex w-full items-start gap-2.5 rounded-[11px] bg-danger/[0.045] p-3 text-left ring-1 ring-danger/15 transition-colors hover:bg-danger/[0.08]">
-                        <AlertTriangle className="mt-px size-4 shrink-0 text-danger" />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[13px] text-fg">{m.title}</span>
-                          <span className="block truncate text-xs text-fg-3">{m.error}</span>
-                        </span>
-                        <ArrowRight className="mt-0.5 size-3.5 shrink-0 text-fg-4 transition-colors group-hover:text-fg-2" />
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <InboxList byId={byId} limit={6} />
               </Panel>
 
               <Panel title="Missions récentes" action={<PanelLink onClick={() => navigate('/missions')} />}>

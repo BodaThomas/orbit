@@ -5,10 +5,11 @@ import { Kbd } from '@/components/ui/field'
 import { Popover, PopoverContent, PopoverTrigger, Tooltip } from '@/components/ui/overlay'
 import { cn } from '@/lib/cn'
 import { moneyParts, money } from '@/lib/format'
-import { useAgents, useApprovals, useBootstrap, useHealth, useProviders, useUsage } from '@/lib/queries'
+import { useAgents, useBootstrap, useHealth, useProviders, useUsage } from '@/lib/queries'
 import { call } from '@/lib/api'
 import { useDemoModeToggle } from '@/lib/demo-mode'
 import { CompanionListItem } from '@/orbit/CompanionListItem'
+import { useInboxCount } from '@/orbit/InboxList'
 import { OrbitLogo } from '@/orbit/Logo'
 import { HEALTH_META, ProviderHealthCard } from '@/orbit/ProviderHealthPopover'
 import { ProviderMark } from '@/orbit/ProviderMark'
@@ -46,14 +47,13 @@ function SectionTitle({ children, action }: { children: React.ReactNode; action?
 
 function GlobalStatus() {
   const health = useHealth()
-  const approvals = useApprovals()
+  const pending = useInboxCount()
   const worst = (health.data ?? []).reduce<'operational' | 'degraded' | 'outage' | 'unknown'>((acc, h) => {
     const rank = { unknown: 0, operational: 1, degraded: 2, outage: 3 }
     return rank[h.level] > rank[acc] ? h.level : acc
   }, 'unknown')
-  const pending = approvals.data?.length ?? 0
   const label = pending
-    ? `${pending} demande${pending > 1 ? 's' : ''} en attente`
+    ? `${pending} élément${pending > 1 ? 's' : ''} à traiter`
     : worst === 'operational'
       ? 'Tous les moteurs sont opérationnels'
       : worst === 'unknown'
@@ -228,6 +228,7 @@ function DemoPill() {
 export function Sidebar() {
   const path = useRouter((s) => s.path)
   const agents = useAgents()
+  const inboxCount = useInboxCount()
   const activeAgentId = /^\/(chat|companions)\/([^/]+)/.exec(path)?.[2]
   /** Arrow keys move between companions; Home/End jump to the ends. */
   const onListKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -280,6 +281,11 @@ export function Sidebar() {
             >
               <Icon className={cn('size-[15px]', active ? 'text-accent' : 'text-fg-3 group-hover:text-fg-2')} strokeWidth={1.8} />
               {item.label}
+              {item.path === '/' && inboxCount > 0 && (
+                <span className="ml-auto rounded-[5px] bg-warning/15 px-1.5 text-[11px] leading-[18px] text-warning tabular group-hover:hidden" aria-label={`${inboxCount} à traiter`}>
+                  {inboxCount}
+                </span>
+              )}
               {'key' in item && <span className="ml-auto text-2xs text-fg-4 opacity-0 group-hover:opacity-100">⌘{item.key}</span>}
             </button>
           )

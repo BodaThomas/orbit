@@ -840,3 +840,9 @@ export const runtimeEvents = sqliteTable(
   },
   (t) => [uniqueIndex('runtime_events_pk').on(t.machineId, t.seq)],
 )
+
+/** Items the user marked as handled in the « À traiter » inbox (failures stay in history). */
+export const inboxDismissals = sqliteTable('inbox_dismissals', {
+  key: text('key').primaryKey(),
+  dismissedAt: createdAt(),
+})

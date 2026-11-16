@@ -22,6 +22,7 @@ import type { PermissionManager } from './permissions'
 import type { PlatformServices } from './platform'
 import type { ProviderRegistry } from './providers'
 import { RemoteMachineManager } from './remote/manager'
+import { Inbox } from './inbox'
 import type { SecurityService } from './security/service'
 import type { SettingsStore } from './settings'
 import type { UsageTracker } from './usage'
@@ -45,6 +46,7 @@ export class OrbitRuntime {
   readonly constellations: ConstellationEngine
   readonly scheduler: Scheduler
   readonly remote: RemoteMachineManager
+  readonly inbox: Inbox
 
   constructor(
     readonly mode: OrbitSettings['mode'],
@@ -85,6 +87,7 @@ export class OrbitRuntime {
     this.scheduler = core.scheduler
     this.health = new HealthMonitor(db, bus, this.journal, platform.fetch)
     this.machines = new MachineRegistry(db)
+    this.inbox = new Inbox(db, bus)
     this.remote = new RemoteMachineManager(this.handle, bus, this.journal, dataDir, platform.runtimeBundle ?? (() => null), undefined, platform.secrets)
     this.remote.attach({ missions: this.missions, constellations: this.constellations, scheduler: this.scheduler, agents: this.agents })
     this.remote.resetOnBoot()
