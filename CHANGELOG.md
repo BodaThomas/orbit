@@ -13,6 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Forms are shorter. The companion wizard has four steps (appearance and planet are one step), the constellation wizard five (name and goal are one step), and rarely changed options such as reasoning effort, strict isolation, automation limits and constellation limits are folded under **Options avancées** (advanced options). The execution location only appears once a machine is connected.
+- The companion profile groups configuration and permissions under one **Réglages** (settings) tab. Approval buttons say what they cover (**Pendant cette mission**, **Toujours, dans ce dossier**) and plan validation options are explained in the form.
+- Onboarding has a back button until the first companion is created.
 - Constellations: the coordinator is asked to mark reviews and checks as read-only, keep dependencies to what a task really needs, and avoid a review, fix and re-check loop on every round, so more sub-missions can run in parallel.
 - Constellations: the number of delegation rounds is no longer capped at 5. The sub-mission count, duration and budget limits still bound a run.
 - Companions: clicking a companion anywhere opens its profile. Companions on an agent engine (Claude Code, Codex) show **Confier une mission** (assign a mission) as their main action and no longer offer a chat that cannot be used.

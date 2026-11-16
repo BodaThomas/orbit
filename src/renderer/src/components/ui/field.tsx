@@ -1,4 +1,5 @@
-import { forwardRef } from 'react'
+import { forwardRef, useState } from 'react'
+import { ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/cn'
 
 const base =
@@ -146,6 +147,20 @@ export function Tabs<T extends string>({ value, onChange, options, className }: 
           </button>
         )
       })}
+    </div>
+  )
+}
+
+/** Options most people never change, folded away so the form stays short. */
+export function AdvancedSection({ children, label = 'Options avancées', defaultOpen = false, className }: { children: React.ReactNode; label?: string; defaultOpen?: boolean; className?: string }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className={className}>
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="flex items-center gap-1 rounded-[5px] text-[12.5px] font-medium text-fg-3 outline-none hover:text-fg-2 focus-visible:text-fg">
+        <ChevronRight className={cn('size-3.5 transition-transform duration-200', open && 'rotate-90')} />
+        {label}
+      </button>
+      {open && <div className="mt-4 space-y-6">{children}</div>}
     </div>
   )
 }

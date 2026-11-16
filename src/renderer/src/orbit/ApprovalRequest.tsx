@@ -110,14 +110,14 @@ export function ApprovalRequestCard({ approval, agent, expanded = false }: { app
             {canMission && (
               <Tooltip content={`${grant!.label} — jusqu’à la fin de cette mission`}>
                 <Button size="xs" variant="secondary" disabled={blocked} onClick={() => resolve.mutate({ id: approval.id, approve: true, scope: 'mission' })}>
-                  <Rocket /> Pour cette mission
+                  <Rocket /> Pendant cette mission
                 </Button>
               </Tooltip>
             )}
             {canAlways && (
-              <Tooltip content={`${grant!.label} — toujours, pour ce compagnon et ce dossier. Révocable dans Permissions.`}>
+              <Tooltip content={`${grant!.label} — toujours, pour ce compagnon et ce dossier. Révocable dans les permissions du compagnon.`}>
                 <Button size="xs" variant="secondary" disabled={blocked} onClick={() => resolve.mutate({ id: approval.id, approve: true, scope: 'always' })}>
-                  <InfinityIcon /> Toujours
+                  <InfinityIcon /> Toujours, dans ce dossier
                 </Button>
               </Tooltip>
             )}
