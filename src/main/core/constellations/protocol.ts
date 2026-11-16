@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import { posix } from 'node:path'
 import { z } from 'zod'
-import type { Agent, AgentPermissions, ConstellationDefinition, ConstellationLimits, PlanDiff, PlanTaskRecord, StructuredResult, SubtaskSpec } from '@shared/types'
+import type { Agent, AgentPermissions, ConstellationDefinition, ConstellationLimits, PlanDiff, PlanQuestion, PlanTaskRecord, StructuredResult, SubtaskSpec } from '@shared/types'
+import { normalizeQuestion } from '@shared/plan-questions'
 import { redactSecrets } from '../security/sensitive'
 
 /**
@@ -29,7 +30,20 @@ const planSchema = z.object({
   /** The coordinator wants the user to validate these tasks before they start. */
   requestApproval: z.boolean().default(false),
   /** Decisions the user must take before the work can continue. */
-  questions: z.array(z.string().trim().min(1).max(1000)).max(20).default([]),
+  questions: z
+    .array(
+      z.union([
+        z.string().trim().min(1).max(1000),
+        z.object({
+          question: z.string().trim().min(1).max(1000),
+          options: z.array(z.string().trim().min(1).max(200)).max(8).default([]),
+          multiple: z.boolean().default(false),
+        }),
+      ]),
+    )
+    .max(20)
+    .default([])
+    .transform((qs) => qs.map(normalizeQuestion).filter((q) => q.text)),
 })
 
 export type PlanTask = z.infer<typeof taskSchema>
@@ -42,7 +56,7 @@ export interface PlanValidation {
   /** A block was present (even invalid): never silently ignored. */
   blockFound: boolean
   requestApproval: boolean
-  questions: string[]
+  questions: PlanQuestion[]
   note: string | null
 }
 
@@ -132,7 +146,7 @@ export function validatePlan(
     coordinatorCanDelegate: boolean
   },
 ): PlanValidation {
-  const base = { tasks: [], requestApproval: false, questions: [] as string[], note: null }
+  const base = { tasks: [], requestApproval: false, questions: [] as PlanQuestion[], note: null }
   const block = extractBlock(text, 'orbit-plan')
   if (block == null) return { ...base, errors: [], noDelegation: true, blockFound: false }
   let json: unknown
@@ -206,12 +220,12 @@ export function validatePlan(
 }
 
 /** Stable identity of a plan: same tasks (resolved companion, content, dependencies) → same hash. */
-export function planHash(tasks: Pick<PlanTaskRecord, 'id' | 'agentId' | 'objective' | 'expected' | 'context' | 'dependsOn' | 'readOnly' | 'writes'>[], questions: string[] = []): string {
+export function planHash(tasks: Pick<PlanTaskRecord, 'id' | 'agentId' | 'objective' | 'expected' | 'context' | 'dependsOn' | 'readOnly' | 'writes'>[], questions: PlanQuestion[] = []): string {
   const canon = [...tasks]
     .sort((a, b) => a.id.localeCompare(b.id))
     // Scopes only join the canonical form when present: plans stored before they existed keep their hash.
     .map((t) => [t.id, t.agentId, t.objective.trim(), t.expected.trim(), t.context.trim(), [...t.dependsOn].sort(), t.readOnly, ...(t.writes?.length ? [[...t.writes].sort()] : [])])
-  return createHash('sha256').update(JSON.stringify([canon, questions.map((q) => q.trim())])).digest('hex').slice(0, 32)
+  return createHash('sha256').update(JSON.stringify([canon, questions.map((q) => (q.options.length ? [q.text, q.options, q.multiple] : q.text))])).digest('hex').slice(0, 32)
 }
 
 const sameTask = (a: PlanTaskRecord, b: PlanTaskRecord) => planHash([a]) === planHash([b])
@@ -354,12 +368,13 @@ export const PARALLEL_RULES = [
 
 /** How the coordinator asks for a decision instead of ending the run. */
 export const PLAN_CONTROL = [
-  `Validation humaine : si l’utilisateur doit valider des sous-missions avant leur démarrage, ajoute \`"requestApproval": true\` au bloc (elles ne démarreront qu’après son accord explicite). Si tu as besoin de décisions avant de pouvoir planifier, termine par \`{"tasks":[],"questions":["décision 1","décision 2"]}\` : la mission collective reste ouverte et la réponse de l’utilisateur te sera transmise.`,
+  `Validation humaine : si l’utilisateur doit valider des sous-missions avant leur démarrage, ajoute \`"requestApproval": true\` au bloc (elles ne démarreront qu’après son accord explicite). Si tu as besoin de décisions avant de pouvoir planifier, termine par \`{"tasks":[],"questions":[…]}\` : la mission collective reste ouverte et la réponse de l’utilisateur te sera transmise.`,
+  `Chaque question est un objet \`{"question":"…","options":["choix A","choix B"]}\` (ajoute \`"multiple": true\` si plusieurs choix peuvent être retenus ensemble). L’utilisateur répond d’un clic : propose 2 à 5 options courtes et précises, une question par décision, sans numéro. Omets « options » seulement si la réponse est libre (un chiffre, un nom).`,
   `Tu ne lances jamais les sous-missions toi-même : c’est Orbit qui le fait dès que le plan est validé. Un bloc \`{"tasks":[]}\` sans question signifie que la mission collective est terminée.`,
 ].join('\n')
 
 /** A user's structured answer or instruction, handed back to the coordinator. */
-export function continuationPrompt(o: { kind: 'answer' | 'rejected' | 'continue' | 'resume'; text: string; questions?: string[]; remaining: number; round: number; usedIds?: string[] }): string {
+export function continuationPrompt(o: { kind: 'answer' | 'rejected' | 'continue' | 'resume'; text: string; questions?: PlanQuestion[]; remaining: number; round: number; usedIds?: string[] }): string {
   const head = {
     answer: `# Réponse de l’utilisateur à tes questions`,
     rejected: `# L’utilisateur n’a pas validé ton plan`,
@@ -368,7 +383,7 @@ export function continuationPrompt(o: { kind: 'answer' | 'rejected' | 'continue'
   }[o.kind]
   return [
     head,
-    o.questions?.length ? `Tes questions :\n${o.questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}` : '',
+    o.questions?.length ? `Tes questions :\n${o.questions.map((q, i) => `${i + 1}. ${q.text}`).join('\n')}` : '',
     o.text ? `Réponse / consigne :\n${o.text}` : '',
     `Poursuis la coordination (tour ${o.round}). Il reste au plus ${o.remaining} sous-missions possibles. Termine par ton bloc \`orbit-plan\`.`,
     usedIdsLine(o.usedIds),

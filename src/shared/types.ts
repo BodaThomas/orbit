@@ -788,6 +788,14 @@ export interface PlanDiff {
   keptDone: string[]
 }
 
+/** A decision asked by the coordinator, with the choices it proposes (none: free answer). */
+export interface PlanQuestion {
+  text: string
+  options: string[]
+  /** Several options can be picked together. */
+  multiple: boolean
+}
+
 export interface ConstellationPlan {
   id: string
   runId: string
@@ -797,7 +805,7 @@ export interface ConstellationPlan {
   hash: string
   tasks: PlanTaskRecord[]
   /** Decisions the coordinator asks the user to take. */
-  questions: string[]
+  questions: PlanQuestion[]
   note: string | null
   errors: string[]
   source: 'coordinator' | 'conversation' | 'user'

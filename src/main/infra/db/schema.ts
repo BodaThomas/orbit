@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm'
 import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 import type { Recurrence } from '@shared/schedule'
-import type { AgentPermissions, ApprovalPayload, Appearance, ConstellationLimits, PlanTaskRecord, RateLimitWindow, StructuredResult, SubtaskSpec } from '@shared/types'
+import type { AgentPermissions, ApprovalPayload, Appearance, ConstellationLimits, PlanQuestion, PlanTaskRecord, RateLimitWindow, StructuredResult, SubtaskSpec } from '@shared/types'
 
 const now = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`
 const createdAt = () => text('created_at').notNull().default(now)
@@ -590,7 +590,7 @@ export const constellationPlans = sqliteTable(
     status: text('status').notNull(),
     hash: text('hash').notNull(),
     tasks: text('tasks', { mode: 'json' }).$type<PlanTaskRecord[]>().notNull(),
-    questions: text('questions', { mode: 'json' }).$type<string[]>().notNull(),
+    questions: text('questions', { mode: 'json' }).$type<(string | PlanQuestion)[]>().notNull(),
     note: text('note'),
     errors: text('errors', { mode: 'json' }).$type<string[]>().notNull(),
     /** coordinator (drive loop), conversation (a chat reply outside the loop), user (edited). */

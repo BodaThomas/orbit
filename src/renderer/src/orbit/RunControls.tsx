@@ -10,6 +10,7 @@ import { cn } from '@/lib/cn'
 import { clock, duration } from '@/lib/format'
 import { useAction } from '@/lib/queries'
 import { useConfirm } from '@/orbit/Confirm'
+import { DecisionForm } from '@/orbit/DecisionForm'
 
 const toneRing = { accent: 'bg-accent/[0.06] ring-accent/20 text-accent', success: 'bg-success/[0.06] ring-success/20 text-success', danger: 'bg-danger/[0.06] ring-danger/15 text-danger', warning: 'bg-warning/[0.07] ring-warning/20 text-warning', neutral: 'bg-white/[0.03] ring-line text-fg-2' } as const
 
@@ -152,9 +153,7 @@ export function PendingPlanCard({ detail, byId }: { detail: ConstellationRunDeta
           </div>
         )}
         {plan.questions.length > 0 && (
-          <ol className="list-decimal space-y-1 pl-5 text-fg">
-            {plan.questions.map((q, i) => <li key={i}>{q}</li>)}
-          </ol>
+          <DecisionForm key={plan.id} runId={detail.run.id} planId={plan.id} questions={plan.questions} canAnswer={detail.actions.includes('answer')} submitLabel={plan.tasks.length ? 'Envoyer sans valider le plan' : 'Envoyer mes décisions'} />
         )}
         {plan.tasks.length > 0 && (
           <>
@@ -180,7 +179,7 @@ export function PendingPlanCard({ detail, byId }: { detail: ConstellationRunDeta
             <p className="text-2xs text-fg-3">Votre accord vaut pour ces sous-missions uniquement : chacune reste soumise aux permissions et aux demandes d’accord de son compagnon, et un plan modifié ensuite sera de nouveau soumis.{writers.length ? ` ${writers.length} peuvent modifier des fichiers ou exécuter des commandes.` : ''}</p>
           </>
         )}
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-1.5 empty:hidden">
           {detail.actions.includes('approve') && (
             <Button size="sm" variant="primary" disabled={approve.isPending} onClick={() => approve.mutate({ id: detail.run.id, planId: plan.id, hash: plan.hash })}>
               <Check /> Valider et lancer
@@ -191,7 +190,7 @@ export function PendingPlanCard({ detail, byId }: { detail: ConstellationRunDeta
               <X /> Refuser avec un commentaire
             </Button>
           )}
-          {detail.actions.includes('answer') && (
+          {detail.actions.includes('answer') && !plan.questions.length && (
             <Button size="sm" variant={plan.tasks.length ? 'ghost' : 'primary'} onClick={() => setReply('answer')}>
               <MessageSquareReply /> {plan.tasks.length ? 'Répondre sans valider' : 'Répondre au coordinateur'}
             </Button>
@@ -199,7 +198,7 @@ export function PendingPlanCard({ detail, byId }: { detail: ConstellationRunDeta
         </div>
       </div>
       {reply === 'reject' && <RejectDialog runId={detail.run.id} planId={plan.id} onClose={() => setReply(null)} />}
-      {reply === 'answer' && <AnswerDialog runId={detail.run.id} title={plan.questions.length ? 'Vos décisions' : 'Réponse au coordinateur'} description="Votre réponse est transmise au coordinateur, qui poursuit la planification. Elle ne vaut pas validation : tout plan qu’il proposera vous sera soumis." onClose={() => setReply(null)} />}
+      {reply === 'answer' && <AnswerDialog runId={detail.run.id} title="Réponse au coordinateur" description="Votre réponse est transmise au coordinateur, qui poursuit la planification. Elle ne vaut pas validation : tout plan qu’il proposera vous sera soumis." onClose={() => setReply(null)} />}
       {limitsOpen && <LimitsDialog runId={detail.run.id} limits={detail.run.limits} used={detail.progress.total} suggestSubtasks={detail.progress.total + plan.tasks.filter((t) => !detail.tasks.some((x) => x.spec.key === t.id)).length} onClose={() => setLimitsOpen(false)} />}
     </Panel>
   )

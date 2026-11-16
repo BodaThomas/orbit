@@ -6,6 +6,7 @@ import type { AgentPermissions, ConstellationLimits } from '@shared/types'
 import { ConstellationEngine, DEFAULT_LIMITS } from '../src/main/core/constellations/engine'
 import { findCycle, normalizeWrites, scopesOverlap, validatePlan } from '../src/main/core/constellations/protocol'
 import type { AgentEngine, EngineId, EngineRunRequest } from '../src/main/core/engine/types'
+import { formatAnswers, looksYesNo, normalizeQuestion } from '@shared/plan-questions'
 import { makeCore, novaInput, waitFor } from './helpers'
 
 const ALL: AgentPermissions = { readFiles: true, writeFiles: true, runCommands: true, network: false, manageProjects: false, externalActions: false }
@@ -93,6 +94,29 @@ function team(opts: { plan: unknown[] | ((call: number, req: EngineRunRequest) =
 }
 
 describe('constellations — protocole', () => {
+  it('lit les questions à choix et les anciennes questions en texte', () => {
+    const agents = [{ id: 'n', name: 'Nova', enabled: true }]
+    const ctx = { definition: { coordinatorAgentId: 'n', members: [{ agentId: 'n', role: '', responsibilities: '', canDelegate: true }], limits: { ...DEFAULT_LIMITS } }, agents, coordinatorCanDelegate: true }
+    const block = (q: unknown) => '```orbit-plan\n' + JSON.stringify({ tasks: [], questions: q }) + '\n```'
+    const v = validatePlan(block(['1. Garder le slogan ?', { question: 'Canaux ?', options: ['LinkedIn', 'Instagram', 'LinkedIn'], multiple: true }, { question: 'Prix ?', options: ['39 €'], multiple: true }]), ctx)
+    expect(v.errors).toEqual([])
+    expect(v.questions).toEqual([
+      { text: 'Garder le slogan ?', options: [], multiple: false },
+      { text: 'Canaux ?', options: ['LinkedIn', 'Instagram'], multiple: true },
+      { text: 'Prix ?', options: ['39 €'], multiple: false },
+    ])
+    expect(normalizeQuestion('2) Palette sombre ?').text).toBe('Palette sombre ?')
+  })
+  it('propose oui / non seulement pour une question fermée', () => {
+    expect(looksYesNo('Acceptez-vous de la mettre en ligne dès que la liste est passée ?')).toBe(true)
+    expect(looksYesNo('Lesquels acceptez-vous ? Et quel est l’ordre de grandeur ?')).toBe(false)
+    expect(looksYesNo('Combien de restaurants ?')).toBe(false)
+  })
+  it('formate les décisions question par question et signale les oublis', () => {
+    const qs = [normalizeQuestion('Palette sombre ?'), normalizeQuestion({ question: 'Canaux ?', options: ['A', 'B'], multiple: true }), normalizeQuestion('Slogan ?')]
+    const text = formatAnswers(qs, [{ choices: ['Oui'], note: '' }, { choices: ['A', 'B'], note: 'B en priorité' }, undefined], 'Merci')
+    expect(text).toBe('1. Palette sombre ?\n   → Oui\n2. Canaux ?\n   → A, B · B en priorité\n3. Slogan ?\n   → Pas de réponse : ne tranche pas seul, redemande si c’est bloquant.\nCommentaire général : Merci')
+  })
   it('détecte les cycles', () => {
     expect(findCycle([{ id: 'a', dependsOn: ['b'] }, { id: 'b', dependsOn: ['a'] }, { id: 'c', dependsOn: [] }]).sort()).toEqual(['a', 'b'])
     expect(findCycle([{ id: 'a', dependsOn: [] }, { id: 'b', dependsOn: ['a'] }])).toEqual([])
