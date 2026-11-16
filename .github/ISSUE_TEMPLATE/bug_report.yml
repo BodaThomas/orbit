@@ -1,0 +1,39 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Click ...
+  - type: input
+    id: version
+    attributes:
+      label: Orbit version
+      placeholder: 0.1.0
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Engine
+      options: [Claude Agent SDK, Claude Code CLI, Codex, Not engine related]
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: macOS 26.1
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant log output. Remove API keys, tokens and personal paths first.
+      render: text
