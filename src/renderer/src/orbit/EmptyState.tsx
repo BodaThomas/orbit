@@ -82,3 +82,20 @@ export function OrbitEmptyState({
     </div>
   )
 }
+
+/** Loading skeleton or retryable error for a list query; renders nothing once data is there. */
+export function QueryFallback({ query, what }: { query: { isLoading: boolean; isError: boolean; data?: unknown; error: unknown; refetch: () => unknown }; what: string }) {
+  if (query.isLoading) return <div className="skeleton h-48 rounded-xl" aria-busy="true" aria-label="Chargement" />
+  if (query.isError && !query.data) {
+    return (
+      <div className="card">
+        <OrbitEmptyState
+          title={`Impossible de charger ${what}`}
+          body={query.error instanceof Error ? query.error.message : 'Une erreur est survenue.'}
+          action={<button className="text-[13px] text-accent hover:underline" onClick={() => void query.refetch()}>Réessayer</button>}
+        />
+      </div>
+    )
+  }
+  return null
+}

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { Columns3, List, Plus, Search } from 'lucide-react'
 import { MISSION_STATUS_LABELS } from '@shared/mission-states'
 import type { Agent, Mission, MissionStatus } from '@shared/types'
@@ -11,6 +11,7 @@ import { useAgents, useMissions } from '@/lib/queries'
 import { Companion } from '@/orbit/Companion'
 import { OrbitEmptyState } from '@/orbit/EmptyState'
 import { MissionStatusIcon, MissionStatusLabel, PriorityGlyph } from '@/orbit/MissionStatus'
+import { useFilters } from '@/stores/filters'
 import { navigate } from '@/stores/router'
 import { useUi } from '@/stores/ui'
 
@@ -45,10 +46,12 @@ function MissionCard({ m, agent }: { m: Mission; agent?: Agent }) {
 export function MissionsPage() {
   const missions = useMissions()
   const agents = useAgents()
-  const [view, setView] = useState<'list' | 'board'>('list')
-  const [q, setQ] = useState('')
-  const [agentFilter, setAgentFilter] = useState<string>('all')
-  const [statusFilter, setStatusFilter] = useState<MissionStatus | 'all'>('all')
+  const { q, agent: agentFilter, status: statusFilter, view } = useFilters((s) => s.missions)
+  const setFilters = useFilters((s) => s.setMissions)
+  const setQ = (v: string) => setFilters({ q: v })
+  const setAgentFilter = (v: string) => setFilters({ agent: v })
+  const setStatusFilter = (v: MissionStatus | 'all') => setFilters({ status: v })
+  const setView = (v: 'list' | 'board') => setFilters({ view: v })
   const byId = useMemo(() => new Map((agents.data ?? []).map((a) => [a.id, a])), [agents.data])
   const list = (missions.data ?? []).filter(
     (m) =>

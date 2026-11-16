@@ -96,3 +96,15 @@ export function ContextMenuItem({ className, danger, ...props }: React.Component
   return <CM.Item className={cn(item, danger && 'text-danger data-[highlighted]:text-danger [&_svg]:text-danger', className)} {...props} />
 }
 export const ContextMenuSeparator = () => <CM.Separator className="mx-1 my-1 h-px bg-line" />
+
+/** Explains why the wrapped control is disabled; a disabled button gets no pointer events, so the span carries the tooltip. */
+export function DisabledReason({ reason, children }: { reason: string | null | undefined; children: React.ReactNode }) {
+  if (!reason) return <>{children}</>
+  return (
+    <Tooltip content={reason}>
+      <span tabIndex={0} className="inline-flex rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/50" aria-label={reason}>
+        {children}
+      </span>
+    </Tooltip>
+  )
+}

@@ -46,7 +46,8 @@ export function OnboardingPage() {
   const createAgent = useAction('agents.create')
   const anthropic = providers.data?.find((p) => p.id === 'anthropic')
   const openai = providers.data?.find((p) => p.id === 'openai')
-  const connected = providers.data?.find((p) => p.connected && p.id !== 'demo')
+  // The first companion is greeted through chat, so prefer a chat engine: an agent engine needs a folder first.
+  const connected = providers.data?.find((p) => p.connected && p.id !== 'demo' && p.capabilities.kind === 'chat') ?? providers.data?.find((p) => p.connected && p.id !== 'demo')
 
   const next = () => setStep((s) => Math.min(TOTAL - 1, s + 1))
 

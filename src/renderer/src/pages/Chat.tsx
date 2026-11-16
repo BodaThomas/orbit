@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowUp, Copy, MessageSquarePlus, MoreHorizontal, Pencil, RotateCcw, Rocket, Search, Square, Trash2, TriangleAlert, UserRound } from 'lucide-react'
 import { STATUS_LABELS } from '@shared/catalog'
 import type { Agent, Conversation, Message } from '@shared/types'
+import { Page, PageLoading } from '@/components/shell/Page'
 import { Button } from '@/components/ui/button'
 import { Input, Kbd } from '@/components/ui/field'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, Tooltip } from '@/components/ui/overlay'
@@ -49,7 +50,7 @@ function ConversationList({ agent, conversations, activeId }: { agent: Agent; co
             </div>
           </button>
         ))}
-        {conversations.length === 0 && <div className="px-2.5 py-3 text-xs text-fg-3">Aucune conversation. Écrivez un premier message.</div>}
+        {conversations.length === 0 && <div className="px-2.5 py-3 text-xs text-fg-3">Aucune conversation pour l’instant.</div>}
       </div>
     </div>
   )
@@ -208,8 +209,8 @@ export function ChatPage({ agentId, conversationId }: { agentId: string; convers
     if (nearBottom || draftLen === 0) el.scrollTo({ top: el.scrollHeight })
   }, [list.length, draftLen])
 
-  if (isLoading) return null
-  if (!agent) return <OrbitEmptyState title="Compagnon introuvable" />
+  if (isLoading) return <PageLoading />
+  if (!agent) return <Page><OrbitEmptyState title="Compagnon introuvable" body="Il a peut-être été supprimé." action={<Button variant="secondary" onClick={() => navigate('/companions')}>Voir tous les compagnons</Button>} /></Page>
 
   const needsKey = provider && provider.availability === 'available' && agent.providerId !== 'demo' && !provider.hasSecret
 

@@ -14,6 +14,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Constellations: the coordinator is asked to mark reviews and checks as read-only, keep dependencies to what a task really needs, and avoid a review, fix and re-check loop on every round, so more sub-missions can run in parallel.
 - Constellations: the number of delegation rounds is no longer capped at 5. The sub-mission count, duration and budget limits still bound a run.
+- Companions: clicking a companion anywhere opens its profile. Companions on an agent engine (Claude Code, Codex) show **Confier une mission** (assign a mission) as their main action and no longer offer a chat that cannot be used.
+- Companions: the wizard explains what is missing before creation, requires a working folder for agent engines and asks before discarding unsaved edits. In edit mode, **Enregistrer** (save) is the main action on every step.
+- Automations: the form says which field blocks saving instead of only disabling the button.
+- Disabled buttons on the constellations page explain why in a tooltip.
+- Mission filters and the list/board choice are kept when you leave the page and come back.
+
+### Fixed
+
+- Stopping a mission, removing an API key, disconnecting a machine and revoking a saved permission now ask for confirmation. Confirmation dialogs for destructive actions focus the safe button.
+- Pages no longer flash empty while loading, and the automation and constellation lists show an error with a retry button when they fail to load.
+- A pending automation run no longer shows « undefined » when its automation was deleted.
+- The machine wizard no longer shows two buttons that do the same thing on its last step.
+- Onboarding prefers a chat engine for the first companion, so the first message can be sent.
 
 ## [0.1.0] - 2026-11-16
 

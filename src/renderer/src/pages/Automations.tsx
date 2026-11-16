@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, ArrowLeft, ArrowLeftRight, CalendarClock, Check, ChevronDown, Clock, Laptop, Loader2, MoreHorizontal, Pencil, Play, Plus, Power, Server, Trash2, Waypoints, X, Zap } from 'lucide-react'
 import { describeRecurrence, localDateTimeInput, type Recurrence } from '@shared/schedule'
 import type { Agent, Automation, AutomationRun, ConstellationDefinition, MissedPolicy, RemoteMachine } from '@shared/types'
-import { Page, PageHeader, Panel } from '@/components/shell/Page'
+import { Page, PageHeader, PageLoading, Panel } from '@/components/shell/Page'
 import { Button } from '@/components/ui/button'
 import { Badge, Input, Label, Segmented, Skeleton, Switch, Textarea } from '@/components/ui/field'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, Tooltip } from '@/components/ui/overlay'
@@ -12,7 +12,7 @@ import { relative } from '@/lib/format'
 import { useAction, useAgents, useAutomationRuns, useAutomations, useConstellations, useRemoteMachines } from '@/lib/queries'
 import { CompanionAvatar } from '@/orbit/CompanionAvatar'
 import { useConfirm } from '@/orbit/Confirm'
-import { OrbitEmptyState } from '@/orbit/EmptyState'
+import { OrbitEmptyState, QueryFallback } from '@/orbit/EmptyState'
 import { navigate } from '@/stores/router'
 import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -233,7 +233,7 @@ function PendingConfirmations({ focus }: { focus?: string | null }) {
           <div key={r.id} className={cn('flex items-center gap-3 rounded-[12px] bg-warning/[0.05] px-4 py-3 ring-1 ring-warning/20', focus === r.id && 'ring-2 ring-warning/60')}>
             <AlertTriangle className="size-4 shrink-0 text-warning" />
             <div className="min-w-0 flex-1">
-              <div className="text-[13px] text-fg">« {a?.name} » n’a pas pu s’exécuter</div>
+              <div className="text-[13px] text-fg">{a ? `« ${a.name} »` : 'Une automatisation supprimée'} n’a pas pu s’exécuter</div>
               <div className="truncate text-[12px] text-fg-3">{r.note}</div>
             </div>
             <Button size="sm" variant="ghost" disabled={confirmRun.isPending} onClick={() => confirmRun.mutate({ id: r.id, approve: false })}>Ignorer</Button>
@@ -265,7 +265,8 @@ export function AutomationsPage({ focusRun }: { focusRun?: string | null }) {
         }
       />
       <PendingConfirmations focus={focusRun} />
-      {automations.data && list.length === 0 ? (
+      <QueryFallback query={automations} what="les automatisations" />
+      {!automations.data ? null : list.length === 0 ? (
         <div className="card">
           <OrbitEmptyState
             title="Aucune automatisation"
@@ -419,7 +420,20 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
   const placement = targetPlacement(targetKind, targetId, agents.data ?? [], defs.data ?? [])
   const locationMachine = location !== 'local' ? machines.data?.find((m) => m.id === location) : null
   const locationOk = location === 'local' || (placement === location && locationMachine?.status === 'online')
-  const valid = name.trim() && targetId && title.trim() && (preset === 'event' ? Boolean(eventSource) : !preview.data?.error) && locationOk
+  const blocker = !name.trim()
+    ? 'Donnez un nom à l’automatisation.'
+    : !targetId
+      ? 'Choisissez qui fait le travail.'
+      : !title.trim()
+        ? 'Décrivez la mission à confier.'
+        : preset === 'event' && !eventSource
+          ? 'Choisissez l’événement déclencheur.'
+          : preset !== 'event' && preview.data?.error
+            ? 'La récurrence n’est pas valide.'
+            : !locationOk
+              ? 'La machine choisie n’est pas disponible pour cette cible.'
+              : null
+  const valid = !blocker
   const save = async () => {
     if (!valid || saving) return
     const input = {
@@ -472,7 +486,7 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
           </div>
         </Page>
       )
-    return null
+    return <PageLoading />
   }
 
   const section = (n: number, label: string, children: React.ReactNode) => (
@@ -701,10 +715,11 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
             <p className="text-xs text-fg-3">Le budget ne compte que la dépense API mesurée ou estimée : l’usage d’un abonnement n’a pas de prix et n’est pas compté. Les permissions, approbations et budgets du compagnon s’appliquent toujours ; un compagnon en mode manuel refuse les missions automatiques.</p>
           </div>,
         )}
-        <div className="flex justify-end gap-2 pb-6">
+        <div className="flex items-center justify-end gap-2 pb-6">
+          {blocker && <span className="mr-auto text-[12px] text-warning">{blocker}</span>}
           <Button variant="ghost" onClick={() => navigate('/automations')}>Annuler</Button>
           <Button variant="primary" disabled={!valid || saving} onClick={() => void save()}>
-            <Check /> {automationId ? 'Enregistrer' : 'Planifier'}
+            <Check /> {automationId ? 'Enregistrer' : 'Créer l’automatisation'}
           </Button>
         </div>
       </div>

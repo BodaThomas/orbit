@@ -9,7 +9,8 @@ import { compactNumber, duration, relative } from '@/lib/format'
 import { useAction, useAgents, useConstellationRuns, useConstellations } from '@/lib/queries'
 import { useConfirm } from '@/orbit/Confirm'
 import { ConstellationMap } from '@/orbit/ConstellationMap'
-import { OrbitEmptyState } from '@/orbit/EmptyState'
+import { DisabledReason } from '@/components/ui/overlay'
+import { OrbitEmptyState, QueryFallback } from '@/orbit/EmptyState'
 import { navigate } from '@/stores/router'
 import { ACTIVE_RUN_STATUSES, RUN_STATUS_INFO, TERMINAL_RUN_STATUSES } from '@shared/constellation-states'
 
@@ -112,9 +113,11 @@ function DefinitionCard({ def, lastRun, onLaunch }: { def: ConstellationDefiniti
         ) : (
           <span className="flex-1">Jamais lancée</span>
         )}
-        <Button size="sm" variant="secondary" onClick={onLaunch} disabled={def.isTemplate}>
-          <Play /> Lancer
-        </Button>
+        <DisabledReason reason={def.isTemplate ? 'Un modèle ne se lance pas : dupliquez-le pour créer une constellation.' : null}>
+          <Button size="sm" variant="secondary" onClick={onLaunch} disabled={def.isTemplate}>
+            <Play /> Lancer
+          </Button>
+        </DisabledReason>
       </div>
     </section>
   )
@@ -127,6 +130,7 @@ export function ConstellationsPage() {
   const [launching, setLaunching] = useState<ConstellationDefinition | null>(null)
   const byId = useMemo(() => new Map((agents.data ?? []).map((a) => [a.id, a])), [agents.data])
   const list = defs.data ?? []
+  const tooFew = (agents.data?.length ?? 0) < 2
   const active = (runs.data ?? []).filter((r) => ACTIVE_RUN_STATUSES.includes(r.status))
   // Unfinished runs survive a restart: waiting for a decision, paused, blocked or failed.
   const unfinished = (runs.data ?? []).filter((r) => !ACTIVE_RUN_STATUSES.includes(r.status) && !TERMINAL_RUN_STATUSES.includes(r.status))
@@ -137,12 +141,15 @@ export function ConstellationsPage() {
         title="Constellations"
         subtitle={list.length ? `${list.length} constellation${list.length > 1 ? 's' : ''}${active.length ? ` · ${active.length} en cours` : ''} · des compagnons qui collaborent sur un objectif commun` : 'Des compagnons qui collaborent sur un objectif commun.'}
         actions={
-          <Button variant="primary" onClick={() => navigate('/constellations/new')} disabled={(agents.data?.length ?? 0) < 2}>
-            <Plus /> Nouvelle constellation
-          </Button>
+          <DisabledReason reason={tooFew ? 'Il faut au moins deux compagnons pour former une constellation.' : null}>
+            <Button variant="primary" onClick={() => navigate('/constellations/new')} disabled={tooFew}>
+              <Plus /> Nouvelle constellation
+            </Button>
+          </DisabledReason>
         }
       />
-      {defs.data && list.length === 0 ? (
+      <QueryFallback query={defs} what="les constellations" />
+      {!defs.data ? null : list.length === 0 ? (
         <div className="card">
           <OrbitEmptyState
             title="Aucune constellation pour l’instant"
@@ -153,9 +160,15 @@ export function ConstellationsPage() {
               { icon: <LayoutTemplate />, label: 'Réutilisable comme modèle' },
             ]}
             action={
-              <Button variant="primary" onClick={() => navigate('/constellations/new')} disabled={(agents.data?.length ?? 0) < 2}>
-                <Plus /> Créer une constellation
-              </Button>
+              tooFew ? (
+                <Button variant="primary" onClick={() => navigate('/companions/new')}>
+                  <Plus /> Créer un deuxième compagnon
+                </Button>
+              ) : (
+                <Button variant="primary" onClick={() => navigate('/constellations/new')}>
+                  <Plus /> Nouvelle constellation
+                </Button>
+              )
             }
           />
         </div>

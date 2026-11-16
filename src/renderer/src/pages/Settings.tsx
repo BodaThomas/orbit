@@ -10,6 +10,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { call } from '@/lib/api'
 import { useDemoModeToggle } from '@/lib/demo-mode'
 import { useAction, useAudit, useBootstrap, useNotifications, useProviders, useSecurity } from '@/lib/queries'
+import { useConfirm } from '@/orbit/Confirm'
 import { AutoActionLog, GrantList } from '@/orbit/PermissionPanels'
 import { ProviderMark } from '@/orbit/ProviderMark'
 import { ClaudeCodeConnection } from '@/orbit/ClaudeCodeConnection'
@@ -44,6 +45,7 @@ export function ProviderConnect({ provider, compact }: { provider: ProviderInfo;
   const [show, setShow] = useState(false)
   const save = useAction('providers.setKey', { success: `${provider.name} connecté — clé enregistrée dans le Trousseau`, onSuccess: () => setKey('') })
   const remove = useAction('providers.removeKey', { success: 'Clé supprimée' })
+  const confirm = useConfirm()
   const validate = useAction('providers.validate', { success: (r) => (r.ok ? 'Connexion vérifiée' : `Échec : ${r.error}`) })
   const planned = provider.availability !== 'available'
   return (
@@ -90,7 +92,9 @@ export function ProviderConnect({ provider, compact }: { provider: ProviderInfo;
               <span className="text-xs text-fg-3">{provider.lastValidatedAt ? `vérifiée ${relative(provider.lastValidatedAt)}` : ''}</span>
               <div className="ml-auto flex gap-1.5">
                 <Button size="sm" variant="ghost" disabled={validate.isPending} onClick={() => validate.mutate({ providerId: provider.id })}>Vérifier</Button>
-                <Button size="sm" variant="ghost" onClick={() => remove.mutate({ providerId: provider.id })}>Supprimer</Button>
+                <Button size="sm" variant="ghost" onClick={async () => {
+                  if (await confirm({ title: `Supprimer la clé ${provider.name} ?`, body: 'Les compagnons qui utilisent ce moteur ne pourront plus travailler tant qu’une nouvelle clé n’est pas enregistrée.', confirm: 'Supprimer', danger: true })) remove.mutate({ providerId: provider.id })
+                }}>Supprimer</Button>
               </div>
             </div>
           ) : null}

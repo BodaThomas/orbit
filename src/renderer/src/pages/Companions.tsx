@@ -16,6 +16,7 @@ import { OrbitEmptyState } from '@/orbit/EmptyState'
 import { ProviderMark } from '@/orbit/ProviderMark'
 import { cn } from '@/lib/cn'
 import { navigate } from '@/stores/router'
+import { useUi } from '@/stores/ui'
 
 const AUTONOMY = AUTONOMY_LABELS
 const STATUS_TEXT: Partial<Record<string, string>> = { working: 'text-accent', awaiting_approval: 'text-warning', error: 'text-danger' }
@@ -156,9 +157,15 @@ export function CompanionsPage() {
                 </div>
               </button>
               <div className="absolute top-2.5 right-2.5 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-                <Button size="icon" variant="secondary" className="backdrop-blur" onClick={() => navigate(`/chat/${a.id}`)} aria-label={`Parler à ${a.name}`}>
-                  <MessageCircle />
-                </Button>
+                {ENGINE_INFO[a.providerId].kind === 'agent' ? (
+                  <Button size="icon" variant="secondary" className="backdrop-blur" onClick={() => useUi.getState().openNewMission(a.id)} aria-label={`Confier une mission à ${a.name}`}>
+                    <Rocket />
+                  </Button>
+                ) : (
+                  <Button size="icon" variant="secondary" className="backdrop-blur" onClick={() => navigate(`/chat/${a.id}`)} aria-label={`Discuter avec ${a.name}`}>
+                    <MessageCircle />
+                  </Button>
+                )}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button size="icon" variant="secondary" className="backdrop-blur" aria-label="Plus d’actions">

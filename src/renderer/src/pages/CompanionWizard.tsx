@@ -5,13 +5,14 @@ import { AUTONOMY_EXPLAINED } from '@shared/permission-labels'
 import { EFFORT_LEVELS, isAgentEngine } from '@shared/engines'
 import type { AgentInput } from '@shared/ipc'
 import type { AgentPermissions, Appearance, AutonomyLevel, PaletteId, ProviderInfo } from '@shared/types'
-import { Page } from '@/components/shell/Page'
+import { Page, PageLoading } from '@/components/shell/Page'
 import { Button } from '@/components/ui/button'
 import { Badge, Input, Label, Switch, Textarea } from '@/components/ui/field'
 import { call } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { useAction, useAgent, useProviders, useRemoteMachines, useSecurity } from '@/lib/queries'
 import { Companion } from '@/orbit/Companion'
+import { useConfirm } from '@/orbit/Confirm'
 import { CompanionAvatar } from '@/orbit/CompanionAvatar'
 import { Planet } from '@/orbit/Planet'
 import { ProviderMark } from '@/orbit/ProviderMark'
@@ -162,7 +163,7 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
     if (demo && !anyConnected) setDraft((d) => ({ ...d, providerId: 'demo', model: 'demo-orbit' }))
   }, [providers.data, editing])
 
-  const create = useAction('agents.create', { success: (a) => `${a.name} a rejoint votre univers`, onSuccess: (a) => navigate(`/chat/${a.id}`) })
+  const create = useAction('agents.create', { success: (a) => `${a.name} a rejoint votre univers`, onSuccess: (a) => navigate(`/companions/${a.id}`) })
   const update = useAction('agents.update', { success: 'Modifications enregistrées', onSuccess: (a) => navigate(`/companions/${a.id}`) })
 
   const set = <K extends keyof AgentInput>(k: K, v: AgentInput[K]) => setDraft((d) => ({ ...d, [k]: v }))
@@ -171,18 +172,28 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
   const provider: ProviderInfo | undefined = providers.data?.find((p) => p.id === draft.providerId)
   const canNext = step !== 0 || draft.name.trim().length > 0
   const last = step === STEPS.length - 1
+  const confirm = useConfirm()
+  // An agent engine acts on files: without a folder it could never start a mission.
+  const missingFolder = isAgentEngine(draft.providerId) && !draft.workingDirectory?.trim()
+  const blocker = !draft.name.trim() ? 'Donnez-lui un nom (étape Identité).' : missingFolder ? 'Choisissez son dossier de travail (étape Cadre).' : null
 
   const save = () => (editing ? update.mutate({ id: agentId!, patch: draft }) : create.mutate(draft))
+  const textOf = (d: Pick<AgentInput, 'name' | 'role' | 'description' | 'instructions' | 'workingDirectory'>) => [d.name, d.role, d.description, d.instructions, d.workingDirectory ?? ''].join('\u0000')
+  const dirty = textOf(draft) !== textOf(editing && existing.data ? existing.data : initialDraft())
+  const leave = async () => {
+    if (dirty && !(await confirm({ title: 'Quitter sans enregistrer ?', body: 'Vos modifications seront perdues.', confirm: 'Quitter', cancel: 'Rester', danger: true }))) return
+    navigate(editing ? `/companions/${agentId}` : '/companions')
+  }
 
   const sensitive = useMemo(() => (Object.keys(draft.permissions) as (keyof AgentPermissions)[]).filter((k) => draft.permissions[k] && PERMISSION_LABELS[k].sensitive), [draft.permissions])
 
-  if (agentId && !loaded) return null
+  if (agentId && !loaded) return <PageLoading />
 
   return (
     <Page wide>
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <button onClick={() => (editing ? navigate(`/companions/${agentId}`) : navigate('/companions'))} className="no-drag mb-1 flex items-center gap-1 text-[13px] text-fg-3 hover:text-fg">
+          <button onClick={() => void leave()} className="no-drag mb-1 flex items-center gap-1 text-[13px] text-fg-3 hover:text-fg">
             <ArrowLeft className="size-3.5" /> {editing ? 'Profil' : 'Compagnons'}
           </button>
           <h1 className="text-[24px] leading-8 font-semibold tracking-[-0.015em] text-fg">{editing ? `Modifier ${existing.data?.name}` : 'Nouveau compagnon'}</h1>
@@ -561,22 +572,29 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
           )}
 
           <div className="mt-8 flex items-center justify-between border-t border-line pt-5">
-            <Button variant="ghost" onClick={() => (step === 0 ? navigate(editing ? `/companions/${agentId}` : '/companions') : setStep(step - 1))}>
+            <Button variant="ghost" onClick={() => (step === 0 ? void leave() : setStep(step - 1))}>
               {step === 0 ? 'Annuler' : (
                 <>
                   <ArrowLeft /> Retour
                 </>
               )}
             </Button>
-            <div className="flex gap-2">
-              {editing && !last && (
-                <Button variant="secondary" disabled={!draft.name.trim() || update.isPending} onClick={save}>
-                  Enregistrer
-                </Button>
-              )}
-              {last ? (
-                <Button variant="primary" disabled={!draft.name.trim() || create.isPending || update.isPending} onClick={save}>
-                  {editing ? <Check /> : <Sparkles />} {editing ? 'Enregistrer' : `Créer ${draft.name || 'le compagnon'}`}
+            <div className="flex items-center gap-2">
+              {(last || editing) && blocker && <span className="text-[12px] text-warning">{blocker}</span>}
+              {editing ? (
+                <>
+                  {!last && (
+                    <Button variant="ghost" onClick={() => setStep(step + 1)}>
+                      Étape suivante <ArrowRight />
+                    </Button>
+                  )}
+                  <Button variant="primary" disabled={Boolean(blocker) || update.isPending} onClick={save}>
+                    <Check /> Enregistrer
+                  </Button>
+                </>
+              ) : last ? (
+                <Button variant="primary" disabled={Boolean(blocker) || create.isPending} onClick={save}>
+                  <Sparkles /> Créer {draft.name || 'le compagnon'}
                 </Button>
               ) : (
                 <Button variant="primary" disabled={!canNext} onClick={() => setStep(step + 1)}>

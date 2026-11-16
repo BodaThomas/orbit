@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/field'
 import { cn } from '@/lib/cn'
 import { relative } from '@/lib/format'
 import { useAction, useAgents, useAutoLog, useGrants } from '@/lib/queries'
+import { useConfirm } from '@/orbit/Confirm'
 import { navigate } from '@/stores/router'
 
 const MODE_ICON = { manual: Lock, supervised: ShieldCheck, automated: Zap, autonomous: Rocket } as const
@@ -83,6 +84,7 @@ export function GrantList({ agentId }: { agentId?: string }) {
   const grants = useGrants(agentId)
   const agents = useAgents()
   const revoke = useAction('permissions.revoke', { success: 'Autorisation révoquée' })
+  const confirm = useConfirm()
   if (grants.data?.length === 0)
     return <div className="rounded-[12px] bg-white/[0.02] px-4 py-5 text-center text-[12.5px] text-fg-3 ring-1 ring-line">Aucune autorisation mémorisée. Elles apparaissent ici quand vous choisissez « Pour cette mission » ou « Toujours » sur une demande.</div>
   return (
@@ -99,7 +101,9 @@ export function GrantList({ agentId }: { agentId?: string }) {
                 {g.category ? ` · ${CATEGORY_LABELS[g.category] ?? g.category}` : ''} · utilisée {g.uses} fois{g.lastUsedAt ? `, ${relative(g.lastUsedAt)}` : ''}
               </div>
             </div>
-            <Button size="xs" variant="ghost" disabled={revoke.isPending} onClick={() => revoke.mutate({ id: g.id })}>
+            <Button size="xs" variant="ghost" disabled={revoke.isPending} onClick={async () => {
+              if (await confirm({ title: 'Révoquer cette autorisation ?', body: `${g.label} vous sera de nouveau demandé à chaque fois.`, confirm: 'Révoquer' })) revoke.mutate({ id: g.id })
+            }}>
               <Undo2 /> Révoquer
             </Button>
           </div>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Activity, AlertTriangle, CalendarClock, Check, ChevronRight, Cloud, Cpu, Fingerprint, Gauge, HardDrive, KeyRound, Laptop, Link2, Link2Off, MemoryStick, Plus, RefreshCw, Rocket, Server, ShieldCheck, SlidersHorizontal, Trash2, Users } from 'lucide-react'
+import { Activity, AlertTriangle, CalendarClock, Check, ChevronRight, Cloud, Cpu, Fingerprint, Gauge, HardDrive, KeyRound, Laptop, Link2, Link2Off, MemoryStick, Plus, RefreshCw, Rocket, Server, ShieldCheck, SlidersHorizontal, ShieldOff, Users } from 'lucide-react'
 import type { EngineStatus, MachineLimits } from '@shared/remote'
 import type { RemoteMachine } from '@shared/types'
 import { Page, PageHeader } from '@/components/shell/Page'
@@ -20,7 +20,7 @@ const STATUS: Record<RemoteMachine['status'], { label: string; tone: 'success' |
   new: { label: 'Nouvelle', tone: 'neutral' },
   pending_host_key: { label: 'Clé d’hôte à vérifier', tone: 'warning' },
   ready: { label: 'Prête', tone: 'accent' },
-  online: { label: '● En ligne', tone: 'success' },
+  online: { label: 'En ligne', tone: 'success' },
   offline: { label: 'Hors ligne', tone: 'neutral' },
   error: { label: 'Erreur', tone: 'danger' },
   revoked: { label: 'Révoquée', tone: 'neutral' },
@@ -342,7 +342,15 @@ function RemoteCard({ m }: { m: RemoteMachine }) {
 
       <div className="mt-4 flex flex-wrap gap-1.5 border-t border-line pt-3">
         {online ? (
-          <Button size="sm" variant="ghost" onClick={() => disconnect.mutate({ id: m.id })}><Link2Off /> Déconnecter</Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={async () => {
+              if (await confirm({ title: `Déconnecter ${m.name} ?`, body: 'Les missions et automatisations prévues sur cette machine ne pourront plus démarrer tant qu’elle n’est pas reconnectée.', confirm: 'Déconnecter' })) disconnect.mutate({ id: m.id })
+            }}
+          >
+            <Link2Off /> Déconnecter
+          </Button>
         ) : (
           <Button size="sm" variant="secondary" disabled={m.status === 'pending_host_key' || connect.isPending} onClick={() => connect.mutate({ id: m.id })}><Link2 /> {connect.isPending ? 'Connexion…' : m.runtimeKeyFingerprint ? 'Se reconnecter' : 'Tester la connexion'}</Button>
         )}
@@ -373,7 +381,7 @@ function RemoteCard({ m }: { m: RemoteMachine }) {
             if (await confirm({ title: `Révoquer ${m.name} ?`, body: 'Orbit demande au runtime d’oublier ce Mac, se déconnecte et oublie la clé d’hôte et l’identité du runtime. L’historique déjà synchronisé reste consultable. Retirez aussi la clé SSH d’Orbit du fichier authorized_keys du serveur.', confirm: 'Révoquer', danger: true })) revoke.mutate({ id: m.id })
           }}
         >
-          <Trash2 /> Révoquer
+          <ShieldOff /> Révoquer
         </Button>
       </div>
     </section>
@@ -503,7 +511,7 @@ function AddMachineWizard({ open, onClose }: { open: boolean; onClose: () => voi
             <div className="mt-5 flex items-center justify-between gap-2 border-t border-line pt-4">
               <span className="text-[11.5px] text-fg-4">{machineId && step < 5 ? 'Machine enregistrée : vous pouvez terminer plus tard depuis sa carte.' : ''}</span>
               <div className="flex gap-2">
-                <Button variant="ghost" onClick={onClose}>{step === 5 ? 'Fermer' : 'Annuler'}</Button>
+                {step < 5 && <Button variant="ghost" onClick={onClose}>{machineId ? 'Finir plus tard' : 'Annuler'}</Button>}
                 {step < 5 && <Button variant="primary" disabled={!canNext || busy} onClick={() => void next()}>{step === 1 && !machineId ? <><Plus /> Enregistrer</> : <>Continuer <ChevronRight /></>}</Button>}
                 {step === 5 && <Button variant="primary" onClick={onClose}><Check /> Terminer</Button>}
               </div>
@@ -563,7 +571,7 @@ export function MachinesPage() {
                   <div className="text-[14px] font-semibold text-fg">{m.name}</div>
                   <div className="truncate text-xs text-fg-3">{m.platform} · ce Mac</div>
                 </div>
-                <Badge tone="success">● En ligne</Badge>
+                <Badge tone="success">En ligne</Badge>
               </div>
               <dl className="mt-3 divide-y divide-line rounded-[11px] bg-white/[0.02] ring-1 ring-line">
                 {Object.entries(m.details).map(([k, v]) => (
