@@ -297,6 +297,18 @@ describe('constellations — orchestration', () => {
     expect(d.run.synthesis).toBe('Synthèse après deux tours.')
   })
 
+  it('accepte plus de cinq tours de délégation', async () => {
+    const t = team({
+      plan: (n) => (n < 7 ? plan([{ id: `t${n}`, assignee: 'Milo', objective: `tour ${n + 1}`, readOnly: true }]) : 'Synthèse après sept tours.'),
+      limits: { maxDepth: 7, maxSubtasks: 10 },
+    })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    const d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('completed')
+    expect(d.tasks.map((x) => x.spec.round)).toEqual([1, 2, 3, 4, 5, 6, 7])
+  })
+
   it('reprise après interruption : les résultats acquis sont conservés', async () => {
     const t = team({ plan: [{ id: 'a', assignee: 'Milo', objective: 'premier', readOnly: true }, { id: 'b', assignee: 'Atlas', objective: 'second', dependsOn: ['a'] }], member: (req) => ({ text: result('ok'), delayMs: req.prompt.includes('second') ? 3000 : 0 }) })
     const run = t.core.constellations.launch(t.def.id, 'x')

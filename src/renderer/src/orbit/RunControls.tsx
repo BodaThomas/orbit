@@ -348,7 +348,7 @@ function LimitsDialog({ runId, limits, used, suggestSubtasks, onClose }: { runId
       <DialogContent title="Limites de cette exécution" description="Ne modifie que cette exécution (pas la constellation). Un plan bloqué par une limite reste soumis à votre validation." className="w-[520px]">
         <div className="grid grid-cols-2 gap-3 px-5">
           {num('maxSubtasks', 'Sous-missions au total', `${used} déjà créées · max 50`)}
-          {num('maxDepth', 'Tours de délégation', 'max 5')}
+          {num('maxDepth', 'Tours de délégation')}
           {num('maxDurationMin', 'Durée de travail (min)', 'pauses et validations exclues')}
           {num('maxTokens', 'Jetons', 'vide = sans limite')}
           {num('maxBudgetUsd', 'Budget ($)', 'vide = sans limite')}

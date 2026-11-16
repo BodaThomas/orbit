@@ -99,7 +99,7 @@ const settingsPatch = z
   .partial()
 
 const limitsSchema = z.object({
-  maxDepth: z.number().int().min(1).max(5),
+  maxDepth: z.number().int().min(1),
   maxSubtasks: z.number().int().min(1).max(50),
   maxParallel: z.number().int().min(1).max(8),
   maxDurationMin: z.number().int().min(1).max(1440),

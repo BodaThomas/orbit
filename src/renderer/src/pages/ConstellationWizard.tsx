@@ -42,7 +42,7 @@ interface Draft {
 
 const empty = (): Draft => ({ name: '', description: '', objective: '', coordinatorAgentId: null, members: [], workspace: null, workspaceMode: 'shared', permissions: { ...DEFAULT_PERMISSIONS, readFiles: true, writeFiles: true }, limits: { ...DEFAULT_LIMITS }, isTemplate: false, planApproval: 'writes' })
 
-function NumberField({ label, hint, value, onChange, min, max, step = 1, suffix, nullable }: { label: string; hint?: string; value: number | null; onChange: (v: number | null) => void; min: number; max: number; step?: number; suffix?: string; nullable?: boolean }) {
+function NumberField({ label, hint, value, onChange, min, max, step = 1, suffix, nullable }: { label: string; hint?: string; value: number | null; onChange: (v: number | null) => void; min: number; max?: number; step?: number; suffix?: string; nullable?: boolean }) {
   return (
     <div>
       <Label hint={hint}>{label}</Label>
@@ -54,7 +54,7 @@ function NumberField({ label, hint, value, onChange, min, max, step = 1, suffix,
           step={step}
           value={value ?? ''}
           placeholder={nullable ? 'Aucune' : undefined}
-          onChange={(e) => onChange(e.target.value === '' ? (nullable ? null : min) : Math.max(min, Math.min(max, Number(e.target.value))))}
+          onChange={(e) => onChange(e.target.value === '' ? (nullable ? null : min) : Math.max(min, Math.min(max ?? Infinity, Number(e.target.value))))}
           className="pr-12 tabular"
         />
         {suffix && <span className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-xs text-fg-3">{suffix}</span>}
@@ -296,7 +296,7 @@ export function ConstellationWizardPage({ constellationId }: { constellationId?:
                 <div className="grid grid-cols-3 gap-3">
                   <NumberField label="Sous-missions au total" value={d.limits.maxSubtasks} onChange={(v) => set('limits', { ...d.limits, maxSubtasks: v ?? 1 })} min={1} max={50} />
                   <NumberField label="En parallèle" value={d.limits.maxParallel} onChange={(v) => set('limits', { ...d.limits, maxParallel: v ?? 1 })} min={1} max={8} />
-                  <NumberField label="Tours de délégation" hint="Profondeur" value={d.limits.maxDepth} onChange={(v) => set('limits', { ...d.limits, maxDepth: v ?? 1 })} min={1} max={5} />
+                  <NumberField label="Tours de délégation" hint="Profondeur" value={d.limits.maxDepth} onChange={(v) => set('limits', { ...d.limits, maxDepth: v ?? 1 })} min={1} />
                 </div>
                 <p className="mt-2 text-xs text-fg-3">Un membre ne peut pas déléguer à son tour, et le coordinateur ne peut pas se confier de mission : aucune boucle possible.</p>
               </div>

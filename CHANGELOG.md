@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - Constellations: the coordinator is asked to mark reviews and checks as read-only, keep dependencies to what a task really needs, and avoid a review, fix and re-check loop on every round, so more sub-missions can run in parallel.
+- Constellations: the number of delegation rounds is no longer capped at 5. The sub-mission count, duration and budget limits still bound a run.
 
 ## [0.1.0] - 2026-11-16
 

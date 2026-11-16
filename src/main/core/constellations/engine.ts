@@ -53,8 +53,12 @@ export interface ConstellationRemote {
 }
 
 export const DEFAULT_LIMITS: ConstellationLimits = { maxDepth: 2, maxSubtasks: 8, maxParallel: 2, maxDurationMin: 60, maxTokens: 2_000_000, maxBudgetUsd: 5 }
-/** Bounds the user can raise limits to (same as the definition form). */
-const LIMIT_BOUNDS = { maxDepth: [1, 5], maxSubtasks: [1, 50], maxParallel: [1, 8], maxDurationMin: [1, 24 * 60] } as const
+/**
+ * Bounds the user can raise limits to (same as the definition form). Rounds
+ * have no ceiling: each one needs at least a sub-mission, so maxSubtasks,
+ * duration and budget already stop a run that keeps delegating.
+ */
+const LIMIT_BOUNDS = { maxDepth: [1, Infinity], maxSubtasks: [1, 50], maxParallel: [1, 8], maxDurationMin: [1, 24 * 60] } as const
 
 export interface ConstellationInput {
   name: string

@@ -100,7 +100,7 @@ const requestId = z.string().min(8).max(80).regex(/^[A-Za-z0-9_:.-]+$/)
 const iso = z.string().max(40)
 const project = z.string().refine(isSafeProjectName, 'Nom de projet invalide (nom simple, sans chemin).')
 const permissions = z.object({ readFiles: z.boolean(), writeFiles: z.boolean(), runCommands: z.boolean(), network: z.boolean(), manageProjects: z.boolean(), externalActions: z.boolean() })
-const limits = z.object({ maxDepth: z.number().int().min(1).max(5), maxSubtasks: z.number().int().min(1).max(50), maxParallel: z.number().int().min(1).max(8), maxDurationMin: z.number().int().min(1).max(1440), maxTokens: z.number().int().min(1000).max(100_000_000).nullable(), maxBudgetUsd: z.number().min(0).max(10_000).nullable() })
+const limits = z.object({ maxDepth: z.number().int().min(1), maxSubtasks: z.number().int().min(1).max(50), maxParallel: z.number().int().min(1).max(8), maxDurationMin: z.number().int().min(1).max(1440), maxTokens: z.number().int().min(1000).max(100_000_000).nullable(), maxBudgetUsd: z.number().min(0).max(10_000).nullable() })
 
 export const agentSyncSchema = z.object({
   id,
