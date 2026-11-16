@@ -234,8 +234,8 @@ export class AgentRunner {
       // of principle (Orbit's data, disabled permissions) are decided before and never get here.
       if (agent.autonomy === 'autonomous') {
         const toolCallId = ensureTool(ask.tool)
-        event('approval', `Autorisé automatiquement (autonomie complète) : ${ask.summary}`, { toolCallId })
-        recordAuto(ask.summary, 'policy', ask.payload.category ?? ask.tool.kind, `Autonomie complète : ${ask.payload.reason ?? ask.summary}`)
+        event('approval', `Autorisé automatiquement (mode autonome) : ${ask.summary}`, { toolCallId })
+        recordAuto(ask.summary, 'policy', ask.payload.category ?? ask.tool.kind, `Mode autonome : ${ask.payload.reason ?? ask.summary}`)
         return Promise.resolve(true)
       }
       const toolCallId = ensureTool(ask.tool)
@@ -247,8 +247,8 @@ export class AgentRunner {
         .insert(approvalRequests)
         .values({ id, agentId: agent.id, missionId, executionId, toolCallId, kind: 'tool_use', summary, detail: ask.payload.reason ?? null, payload: ask.payload.grant ? { ...ask.payload, grant: { ...ask.payload.grant, workspace } } : ask.payload, status: 'pending', createdAt: nowIso() })
         .run()
-      event('approval', `Demande d’approbation : ${ask.summary}`, { approvalId: id, toolCallId })
-      this.journal.activity({ type: 'approval.requested', level: 'warning', agentId: agent.id, missionId, title: 'Approbation demandée', detail: summary })
+      event('approval', `Demande d’accord : ${ask.summary}`, { approvalId: id, toolCallId })
+      this.journal.activity({ type: 'approval.requested', level: 'warning', agentId: agent.id, missionId, title: 'Accord demandé', detail: summary })
       this.journal.notify('approval', `${agent.name} demande votre accord`, ask.summary, `/missions/${missionId}?approval=${id}`)
       waiting++
       if (waiting === 1) job.onWaiting(true)
@@ -270,7 +270,7 @@ export class AgentRunner {
               .run()
             pushTool(toolCallId)
             if (ok) setActivity('tool', ask.summary, toolCallId)
-            event('approval', ok ? `Approuvé : ${ask.summary}` : cancelled ? `Sans réponse (mission arrêtée) : ${ask.summary}` : `Refusé : ${ask.summary}`, { approvalId: id, toolCallId, approved: ok })
+            event('approval', ok ? `Autorisé : ${ask.summary}` : cancelled ? `Sans réponse (mission arrêtée) : ${ask.summary}` : `Refusé : ${ask.summary}`, { approvalId: id, toolCallId, approved: ok })
             resolve(ok)
           },
         })

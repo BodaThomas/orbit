@@ -105,7 +105,7 @@ export class RemoteMachineManager {
   ) {
     this.mirror = new RemoteMirror(handle.sqlite, {
       agent: (id) => this.db.select({ n: agents.name }).from(agents).where(eq(agents.id, id)).get()?.n ?? 'Un compagnon',
-      machine: (id) => this.db.select({ n: runtimeMachines.name }).from(runtimeMachines).where(eq(runtimeMachines.id, id)).get()?.n ?? 'le serveur',
+      machine: (id) => this.db.select({ n: runtimeMachines.name }).from(runtimeMachines).where(eq(runtimeMachines.id, id)).get()?.n ?? 'la machine',
     })
   }
 
@@ -378,7 +378,7 @@ export class RemoteMachineManager {
       const slot = Math.floor(Date.now() / 600_000)
       if (status !== 'online' && before.s === 'online' && !userAction) {
         this.lost.add(id)
-        this.journal.notify('machine', `${before.n} est injoignable`, `Les missions continuent sur le serveur. ${error ?? ''}`.trim(), '/machines', `machine:${id}:lost:${slot}`)
+        this.journal.notify('machine', `${before.n} est injoignable`, `Les missions continuent sur la machine. ${error ?? ''}`.trim(), '/machines', `machine:${id}:lost:${slot}`)
       } else if (status === 'online' && this.lost.delete(id)) {
         this.journal.notify('machine', `${before.n} est de nouveau joignable`, 'Synchronisation en cours.', '/machines', `machine:${id}:back:${slot}`)
       }
@@ -656,11 +656,11 @@ export class RemoteMachineManager {
   private afterCommand(method: string, entityId: string | null, _res: unknown, err: unknown) {
     if (!err || !entityId || !(err instanceof OrbitError) || err.code !== 'conflict') return
     if (method === 'mission.create') {
-      this.db.update(missions).set({ status: 'failed', error: `Refusée par le serveur : ${err.message}`, finishedAt: nowIso(), updatedAt: nowIso() }).where(and(eq(missions.id, entityId), eq(missions.status, 'todo'))).run()
+      this.db.update(missions).set({ status: 'failed', error: `Refusée par la machine : ${err.message}`, finishedAt: nowIso(), updatedAt: nowIso() }).where(and(eq(missions.id, entityId), eq(missions.status, 'todo'))).run()
       this.bus.invalidate('missions')
     }
     if (method === 'constellation.launch') {
-      this.db.update(constellationRuns).set({ status: 'failed', error: `Refusée par le serveur : ${err.message}`, finishedAt: nowIso() }).where(and(eq(constellationRuns.id, entityId), eq(constellationRuns.status, 'planning'))).run()
+      this.db.update(constellationRuns).set({ status: 'failed', error: `Refusée par la machine : ${err.message}`, finishedAt: nowIso() }).where(and(eq(constellationRuns.id, entityId), eq(constellationRuns.status, 'planning'))).run()
       this.bus.invalidate('constellations')
     }
   }
@@ -907,7 +907,7 @@ export class RemoteMachineManager {
     }
     await this.command(to, 'automation.put', { automation: snap }, { kind: 'automation', id: a.id }, this.opId('au', 'automation.put', a.id, `_v${a.configVersion}_to_${to}`))
     const check = await this.command<{ automation: Automation; owned: boolean }>(to, 'automation.get', { id: a.id })
-    if (!check.owned || check.automation.configVersion !== a.configVersion) throw new OrbitError('conflict', 'Le serveur n’a pas confirmé l’enregistrement : transfert suspendu.')
+    if (!check.owned || check.automation.configVersion !== a.configVersion) throw new OrbitError('conflict', 'La machine n’a pas confirmé l’enregistrement : transfert suspendu.')
     this.db.update(automationDefinitions).set({ schedulerOwner: to, ownerState: 'active', pendingOwner: null, nextRunAt: check.automation.nextRunAt, updatedAt: nowIso() }).where(eq(automationDefinitions.id, a.id)).run()
     this.bus.invalidate('automations')
   }

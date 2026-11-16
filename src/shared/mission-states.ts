@@ -21,7 +21,7 @@ export const MISSION_STATUS_LABELS: Record<MissionStatus, string> = {
   scheduled: 'Planifiée',
   running: 'En cours',
   waiting: 'En attente',
-  approval_required: 'Approbation nécessaire',
+  approval_required: 'Attend votre accord',
   done: 'Terminée',
   failed: 'Échec',
   cancelled: 'Annulée',

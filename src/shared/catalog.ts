@@ -123,7 +123,7 @@ export const TEXTURES: { id: PlanetTexture; label: string }[] = [
 export const STATUS_LABELS: Record<AgentStatus, string> = {
   available: 'Disponible',
   working: 'En mission',
-  awaiting_approval: 'Approbation nécessaire',
+  awaiting_approval: 'Attend votre accord',
   done: 'Mission terminée',
   error: 'Erreur',
   offline: 'Hors ligne',
@@ -143,7 +143,7 @@ export const PERMISSION_LABELS: Record<keyof AgentPermissions, { label: string; 
   readFiles: { label: 'Lecture de fichiers', hint: 'Lire dans le dossier de travail', sensitive: false },
   writeFiles: { label: 'Écriture de fichiers', hint: 'Créer et modifier des fichiers', sensitive: true },
   runCommands: { label: 'Exécution de commandes', hint: 'Lancer des commandes shell', sensitive: true },
-  network: { label: 'Accès réseau', hint: 'Requêtes web au-delà du fournisseur', sensitive: false },
+  network: { label: 'Accès réseau', hint: 'Requêtes web au-delà du moteur', sensitive: false },
   manageProjects: { label: 'Gestion de projets', hint: 'Créer des missions et sous-missions', sensitive: false },
   externalActions: { label: 'Actions externes', hint: 'E-mails, publications, achats', sensitive: true },
 }

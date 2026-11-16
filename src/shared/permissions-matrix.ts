@@ -25,7 +25,7 @@ export function effectivePermissions(agent: Pick<Agent, 'permissions' | 'autonom
       companion,
       effective: 'denied',
       enforcedBy: ['engine'],
-      detail: 'Fournisseur conversationnel : aucun outil n’existe dans la session, le modèle ne peut que répondre.',
+      detail: 'Moteur conversationnel : aucun outil n’existe dans la session, le modèle ne peut que répondre.',
     })
     return [none('read', 'Lire des fichiers', p.readFiles), none('write', 'Modifier des fichiers', p.writeFiles), none('commands', 'Exécuter des commandes', p.runCommands), none('network', 'Accès réseau', p.network), none('external', 'Actions externes', p.externalActions)]
   }
@@ -52,7 +52,7 @@ export function effectivePermissions(agent: Pick<Agent, 'permissions' | 'autonom
       detail:
         engine === 'codex'
           ? 'Codex lit par des commandes en lecture seule (cat, rg, ls…) exécutées dans son bac à sable.'
-          : 'Outils Read/Glob/Grep limités au dossier autorisé ; les fichiers sensibles demandent votre accord.',
+          : 'Outils Read/Glob/Grep limités au dossier de travail ; les fichiers sensibles demandent votre accord.',
     })
   }
 
@@ -68,7 +68,7 @@ export function effectivePermissions(agent: Pick<Agent, 'permissions' | 'autonom
             companion: true,
             effective: 'allowed',
             enforcedBy: ['policy', 'sandbox'],
-            detail: full ? 'Autonomie complète : toute modification sans confirmation, y compris fichiers sensibles, hooks et configuration d’outils ; seules les données d’Orbit restent refusées.' : `Sans confirmation dans le dossier autorisé, refusé ailleurs. Toujours sur accord : fichiers sensibles (.env, clés), hooks Git et configuration d’outils (.git, .claude, .vscode, .husky)${contained || auto ? '' : ', et fichiers qui décident de ce qu’exécutent les tests (package.json, Makefile, *.config.ts…) car les commandes de Codex ne sont pas confinées'}.`,
+            detail: full ? 'Mode autonome : toute modification sans confirmation, y compris fichiers sensibles, hooks et configuration d’outils ; seules les données d’Orbit restent refusées.' : `Sans confirmation dans le dossier de travail, refusé ailleurs. Toujours sur accord : fichiers sensibles (.env, clés), hooks Git et configuration d’outils (.git, .claude, .vscode, .husky)${contained || auto ? '' : ', et fichiers qui décident de ce qu’exécutent les tests (package.json, Makefile, *.config.ts…) car les commandes de Codex ne sont pas confinées'}.`,
           },
   )
 
@@ -96,7 +96,7 @@ export function effectivePermissions(agent: Pick<Agent, 'permissions' | 'autonom
       effective: auto ? 'allowed' : 'partial',
       enforcedBy: auto ? ['policy', 'sandbox', 'approval'] : ['policy', 'approval', 'sandbox'],
       detail: full
-        ? 'Autonomie complète : toute commande s’exécute sans confirmation, hors bac à sable des commandes Claude (le bac à sable Codex reste en écriture dans le dossier, ses escalades sont acceptées par Orbit).'
+        ? 'Mode autonome : toute commande s’exécute sans confirmation, hors bac à sable des commandes Claude (le bac à sable Codex reste en écriture dans le dossier, ses escalades sont acceptées par Orbit).'
         : auto
         ? `Commandes courantes sans confirmation${engine === 'codex' ? ' dans le bac à sable Codex' : ''} ; une commande qu’Orbit ne sait pas classer est confiée au mode auto de Claude quand il est actif. Les actions sensibles vous restent soumises.`
         : contained
@@ -113,10 +113,10 @@ export function effectivePermissions(agent: Pick<Agent, 'permissions' | 'autonom
   )
 
   if (full) {
-    rows.push({ key: 'sensitive', label: 'Actions sensibles', companion: true, effective: p.runCommands ? 'allowed' : 'denied', enforcedBy: ['policy'], detail: 'Autonomie complète : installations, Git distant ou destructif, suppressions, déploiements, publication, secrets et commandes système s’exécutent sans confirmation, sans bac à sable des commandes Claude, et sont journalisés. Seules les données d’Orbit restent refusées.' })
-    rows.push({ key: 'external', label: 'Actions externes', companion: p.externalActions, effective: p.externalActions ? 'allowed' : 'denied', enforcedBy: ['policy'], detail: p.externalActions ? 'Outils MCP sans confirmation (autonomie complète).' : 'Permission désactivée : refusées.' })
-    rows.push({ key: 'outside', label: 'Lire hors du dossier', companion: true, effective: strict ? 'denied' : 'allowed', enforcedBy: strict ? ['isolation', 'policy'] : ['policy'], detail: strict ? 'Isolation renforcée active : le noyau refuse les lectures hors du projet, même en autonomie complète.' : 'Autonomie complète : Orbit ne bloque plus les accès hors du dossier (sauf ses propres données) ; le moteur peut encore limiter ses outils de fichiers au dossier.' })
-    rows.push({ key: 'secrets', label: 'Fichiers sensibles (.env, clés SSH)', companion: true, effective: strict ? 'partial' : 'allowed', enforcedBy: strict ? ['isolation', 'policy'] : ['policy'], detail: 'Autonomie complète : accès sans confirmation, journalisés.' })
+    rows.push({ key: 'sensitive', label: 'Actions sensibles', companion: true, effective: p.runCommands ? 'allowed' : 'denied', enforcedBy: ['policy'], detail: 'Mode autonome : installations, Git distant ou destructif, suppressions, déploiements, publication, secrets et commandes système s’exécutent sans confirmation, sans bac à sable des commandes Claude, et sont journalisés. Seules les données d’Orbit restent refusées.' })
+    rows.push({ key: 'external', label: 'Actions externes', companion: p.externalActions, effective: p.externalActions ? 'allowed' : 'denied', enforcedBy: ['policy'], detail: p.externalActions ? 'Outils MCP sans confirmation (mode autonome).' : 'Permission désactivée : refusées.' })
+    rows.push({ key: 'outside', label: 'Lire hors du dossier', companion: true, effective: strict ? 'denied' : 'allowed', enforcedBy: strict ? ['isolation', 'policy'] : ['policy'], detail: strict ? 'Isolation renforcée active : le noyau refuse les lectures hors du projet, même en mode autonome.' : 'Mode autonome : Orbit ne bloque plus les accès hors du dossier (sauf ses propres données) ; le moteur peut encore limiter ses outils de fichiers au dossier.' })
+    rows.push({ key: 'secrets', label: 'Fichiers sensibles (.env, clés SSH)', companion: true, effective: strict ? 'partial' : 'allowed', enforcedBy: strict ? ['isolation', 'policy'] : ['policy'], detail: 'Mode autonome : accès sans confirmation, journalisés.' })
     return rows
   }
 

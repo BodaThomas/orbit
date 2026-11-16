@@ -72,7 +72,7 @@ export function RunStatusBanner({ detail, byId }: { detail: ConstellationRunDeta
                 if (await confirm({ title: 'Poursuivre sans les sous-missions en échec ?', body: 'Elles sont marquées « ignorées » (leur historique reste consultable), ainsi que celles qui en dépendent. Le coordinateur fera la synthèse avec les résultats obtenus.', confirm: 'Poursuivre sans elles' })) resume.mutate({ id: run.id, skipFailed: true })
               }}
             >
-              Poursuivre sans elles
+              Ignorer les échecs et continuer
             </Button>
           )}
           {actions.includes('edit_plan') && (
@@ -87,7 +87,7 @@ export function RunStatusBanner({ detail, byId }: { detail: ConstellationRunDeta
           )}
           {actions.includes('continue') && !detail.pendingPlan && (
             <Button size="sm" variant="ghost" onClick={() => setContinueOpen(true)}>
-              <MessageSquareReply /> Poursuivre avec le coordinateur
+              <MessageSquareReply /> Répondre au coordinateur
             </Button>
           )}
           {actions.includes('pause') && (
@@ -100,10 +100,10 @@ export function RunStatusBanner({ detail, byId }: { detail: ConstellationRunDeta
               size="sm"
               variant="ghost"
               onClick={async () => {
-                if (await confirm({ title: 'Annuler la mission collective ?', body: 'Les sous-missions en cours sont interrompues (leurs processus arrêtés) et les suivantes ne démarrent pas. L’historique, les plans et les résultats déjà obtenus sont conservés.', confirm: 'Annuler la mission', danger: true })) cancel.mutate({ id: run.id })
+                if (await confirm({ title: 'Arrêter la mission collective ?', body: 'Les sous-missions en cours sont interrompues (leurs processus arrêtés) et les suivantes ne démarrent pas. L’historique, les plans et les résultats déjà obtenus sont conservés.', confirm: 'Arrêter', cancel: 'Continuer', danger: true })) cancel.mutate({ id: run.id })
               }}
             >
-              <CircleStop /> Annuler
+              <CircleStop /> Arrêter
             </Button>
           )}
         </div>
@@ -134,7 +134,7 @@ function taskMark(plan: ConstellationPlan, id: string): { label: string; tone: '
 /** The decision waiting for the user: approve these exact tasks, refuse, or answer questions. */
 export function PendingPlanCard({ detail, byId }: { detail: ConstellationRunDetail; byId: Map<string, Agent> }) {
   const plan = detail.pendingPlan
-  const approve = useAction('constellations.approvePlan', { success: 'Plan approuvé : les sous-missions prêtes démarrent' })
+  const approve = useAction('constellations.approvePlan', { success: 'Plan validé : les sous-missions prêtes démarrent' })
   const [reply, setReply] = useState<'reject' | 'answer' | null>(null)
   const [limitsOpen, setLimitsOpen] = useState(false)
   if (!plan) return null
@@ -183,7 +183,7 @@ export function PendingPlanCard({ detail, byId }: { detail: ConstellationRunDeta
         <div className="flex flex-wrap gap-1.5">
           {detail.actions.includes('approve') && (
             <Button size="sm" variant="primary" disabled={approve.isPending} onClick={() => approve.mutate({ id: detail.run.id, planId: plan.id, hash: plan.hash })}>
-              <Check /> Approuver et lancer
+              <Check /> Valider et lancer
             </Button>
           )}
           {detail.actions.includes('reject') && (
@@ -193,7 +193,7 @@ export function PendingPlanCard({ detail, byId }: { detail: ConstellationRunDeta
           )}
           {detail.actions.includes('answer') && (
             <Button size="sm" variant={plan.tasks.length ? 'ghost' : 'primary'} onClick={() => setReply('answer')}>
-              <MessageSquareReply /> {plan.tasks.length ? 'Répondre sans approuver' : 'Répondre au coordinateur'}
+              <MessageSquareReply /> {plan.tasks.length ? 'Répondre sans valider' : 'Répondre au coordinateur'}
             </Button>
           )}
         </div>
@@ -285,7 +285,7 @@ function EditPlanDialog({ detail, byId, onClose }: { detail: ConstellationRunDet
   const locked = new Set(detail.tasks.filter((t) => t.status === 'done' || t.status === 'running' || t.status === 'waiting').map((t) => t.spec.key))
   const members = (detail.definition?.members ?? []).filter((m) => m.agentId !== detail.run.coordinatorAgentId).map((m) => byId.get(m.agentId)).filter((a): a is Agent => Boolean(a))
   const [rows, setRows] = useState<EditableTask[]>((base?.tasks ?? []).map((t) => ({ ...t, assignee: byId.get(t.agentId)?.name ?? t.assignee, dependsOn: t.dependsOn.join(', '), writes: (t.writes ?? []).join(', ') })))
-  const edit = useAction('constellations.editPlan', { success: 'Nouvelle version du plan : vérifiez les différences puis approuvez', onSuccess: onClose })
+  const edit = useAction('constellations.editPlan', { success: 'Nouvelle version du plan : vérifiez les différences puis validez', onSuccess: onClose })
   const set = (i: number, patch: Partial<EditableTask>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -378,7 +378,7 @@ const KIND_LABEL: Record<string, string> = {
   'task.cancelled': 'Sous-mission arrêtée',
   'task.refused': 'Démarrage refusé',
   'run.completed': 'Mission collective terminée',
-  'run.failed': 'Échec de l’orchestration',
+  'run.failed': 'Échec de la mission collective',
   'run.error': 'Erreur technique',
   'run.blocked': 'Intervention nécessaire',
   'run.incoherent': 'Incohérence détectée',

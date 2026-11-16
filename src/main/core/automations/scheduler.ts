@@ -446,7 +446,7 @@ export class Scheduler {
       if (a.targetKind === 'agent') {
         const m = this.missions.create({ title: a.title, description: a.prompt, agentId: a.targetId, priority: 'normal', startNow: true, origin: 'automation' })
         this.db.update(automationRuns).set({ status: 'running', missionId: m.id, startedAt: ts }).where(eq(automationRuns.id, runId)).run()
-        if (m.status === 'approval_required') this.journal.notify('approval', `« ${a.name} » attend votre accord`, `${a.title} : démarrage à approuver.`, `/missions/${m.id}`)
+        if (m.status === 'approval_required') this.journal.notify('approval', `« ${a.name} » attend votre accord`, `${a.title} : démarrage à autoriser.`, `/missions/${m.id}`)
       } else {
         const run = this.constellations.launch(a.targetId, `${a.title}\n\n${a.prompt}`, { origin: 'automation', idempotencyKey: `automation:${runId}` })
         this.db.update(automationRuns).set({ status: 'running', constellationRunId: run.id, startedAt: ts }).where(eq(automationRuns.id, runId)).run()

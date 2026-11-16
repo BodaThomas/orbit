@@ -65,7 +65,7 @@ function Inspector({ detail, agent, onClose }: { detail: ConstellationRunDetail;
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 text-[12.5px]">
         {live && <div className="rounded-[10px] bg-accent/[0.07] px-3 py-2 text-accent ring-1 ring-accent/20">{live.label} · depuis {duration(live.since)}</div>}
         <div>
-          <div className="eyebrow mb-1.5">{isCoord ? 'Coordination' : 'Mission actuelle'}</div>
+          <div className="eyebrow mb-1.5">{isCoord ? 'Coordinateur' : 'Mission actuelle'}</div>
           {mission.data ? (
             <button onClick={() => navigate(`/missions/${mission.data!.mission.id}`)} className="group w-full rounded-[10px] bg-white/[0.03] p-2.5 text-left ring-1 ring-line hover:bg-white/[0.05]">
               <div className="flex items-center gap-2">
@@ -263,7 +263,7 @@ function Workspaces({ detail, byId }: { detail: ConstellationRunDetail; byId: Ma
 function RunMachineBadge({ machineId }: { machineId: string }) {
   const { machine, online, lastSyncedAt } = useRemoteState(machineId)
   return (
-    <Tooltip content={online ? 'Coordonnée par le serveur, indépendamment de ce Mac.' : `Serveur injoignable : dernier état connu${lastSyncedAt ? `, synchronisé ${relative(lastSyncedAt)}` : ''}.`}>
+    <Tooltip content={online ? 'Coordonnée par la machine, indépendamment de ce Mac.' : `Machine injoignable : dernier état connu${lastSyncedAt ? `, synchronisé ${relative(lastSyncedAt)}` : ''}.`}>
       <span><Badge tone={online ? 'neutral' : 'warning'}><Server className="size-3" /> {machine?.name ?? 'Serveur'}{online ? '' : ' · hors ligne'}</Badge></span>
     </Tooltip>
   )
@@ -279,7 +279,7 @@ export function ConstellationRunPage({ runId }: { runId: string }) {
   if (q.isLoading || !q.data) return <Page wide><Skeleton className="h-[480px] rounded-xl" /></Page>
   const d = q.data
   const { run } = d
-  const members = d.definition?.members ?? [{ agentId: run.coordinatorAgentId, role: 'Coordination', responsibilities: '', canDelegate: true }]
+  const members = d.definition?.members ?? [{ agentId: run.coordinatorAgentId, role: 'Coordinateur', responsibilities: '', canDelegate: true }]
   const coordMission = run.coordinatorMissionId
   const nodes = members
     .map((m): MapNode | null => {
@@ -296,7 +296,7 @@ export function ConstellationRunPage({ runId }: { runId: string }) {
         coordinator,
         state,
         activity: live?.label ?? null,
-        caption: coordinator ? { planning: 'Planifie', ready: 'Plan validé', awaiting_approval: 'Attend votre décision', running: `Suit ${d.tasks.filter((t) => ['running', 'approval_required'].includes(t.status)).length} sous-mission(s)`, synthesizing: 'Rédige la synthèse', completed: 'Mission collective terminée', paused: 'En pause', blocked: 'Bloquée', failed: 'Échec', cancelled: 'Annulée' }[run.status] : working ? working.spec.objective.split('\n')[0] : tasks.at(-1)?.structured?.summary ?? null,
+        caption: coordinator ? { planning: 'Planifie', ready: 'Plan validé', awaiting_approval: 'Attend votre accord', running: `Suit ${d.tasks.filter((t) => ['running', 'approval_required'].includes(t.status)).length} sous-mission(s)`, synthesizing: 'Rédige la synthèse', completed: 'Mission collective terminée', paused: 'En pause', blocked: 'Bloquée', failed: 'Échec', cancelled: 'Annulée' }[run.status] : working ? working.spec.objective.split('\n')[0] : tasks.at(-1)?.structured?.summary ?? null,
       }
     })
     .filter((n): n is MapNode => n !== null)
@@ -328,14 +328,14 @@ export function ConstellationRunPage({ runId }: { runId: string }) {
           </div>
         </div>
         <div className="flex shrink-0 gap-2">
-          {coordMission && <Button variant="ghost" onClick={() => navigate(`/missions/${coordMission}`)}>Coordination <ArrowRight /></Button>}
+          {coordMission && <Button variant="ghost" onClick={() => navigate(`/missions/${coordMission}`)}>Mission du coordinateur <ArrowRight /></Button>}
         </div>
       </div>
       <RunStatusBanner detail={d} byId={byId} />
       <PendingPlanCard detail={d} byId={byId} />
 
       <div className="mb-3 flex items-center justify-between">
-        <Segmented value={view} onChange={setView} options={[{ value: 'universe', label: 'Univers' }, { value: 'list', label: 'Liste' }, { value: 'timeline', label: 'Timeline' }]} />
+        <Segmented value={view} onChange={setView} options={[{ value: 'universe', label: 'Univers' }, { value: 'list', label: 'Liste' }, { value: 'timeline', label: 'Chronologie' }]} />
         <span className="flex items-center gap-3 text-[11px] text-fg-3">
           <span className="flex items-center gap-1.5"><span className="h-px w-4 bg-accent" /> au travail</span>
           <span className="flex items-center gap-1.5"><span className="h-px w-4 border-t border-dashed border-warning" /> attend votre accord</span>

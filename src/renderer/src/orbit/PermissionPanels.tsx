@@ -48,7 +48,7 @@ export function AutoAllowedList({ agent }: { agent: Agent }) {
   const auto = agent.autonomy === 'automated' || full
   const codex = agent.providerId === 'codex'
   const items: { label: string; on: boolean; note?: string }[] = [
-    { label: 'Lire des fichiers dans le dossier autorisé', on: p.readFiles },
+    { label: 'Lire des fichiers dans le dossier de travail', on: p.readFiles },
     { label: 'Rechercher dans le code (Grep, Glob, rg, find)', on: p.readFiles },
     { label: 'Modifier des fichiers du dossier', on: p.writeFiles && !manual, note: 'hors fichiers sensibles, hooks Git et configuration d’outils' },
     { label: 'Inspecter : ls, cat, git status, git diff, git log…', on: p.runCommands && !manual },
@@ -57,7 +57,7 @@ export function AutoAllowedList({ agent }: { agent: Agent }) {
     { label: 'Pages et recherches web', on: p.network && auto },
     ...(full
       ? [
-          { label: 'Installations, Git distant ou destructif, suppressions, déploiements, publication', on: p.runCommands, note: 'autonomie complète : exécuté puis journalisé' },
+          { label: 'Installations, Git distant ou destructif, suppressions, déploiements, publication', on: p.runCommands, note: 'mode autonome : exécuté puis journalisé' },
           { label: 'Fichiers sensibles, hooks, chemins hors du dossier', on: p.readFiles || p.writeFiles || p.runCommands, note: 'les données d’Orbit restent refusées' },
           { label: 'Outils externes (MCP)', on: p.externalActions },
         ]

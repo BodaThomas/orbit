@@ -48,8 +48,8 @@ function HostKeyCheck({ m }: { m: RemoteMachine }) {
   }
   return (
     <div className="rounded-[11px] bg-warning/[0.05] p-3 text-[12.5px] ring-1 ring-warning/20">
-      <div className="flex items-center gap-2 text-fg"><KeyRound className="size-3.5 text-warning" /> Vérifiez l’identité du serveur (SSH)</div>
-      <p className="mt-1 text-fg-3">Comparez avec l’empreinte affichée par votre hébergeur, ou par « ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub » sur le serveur. Orbit refusera toute autre clé ensuite.</p>
+      <div className="flex items-center gap-2 text-fg"><KeyRound className="size-3.5 text-warning" /> Vérifiez l’identité de la machine (SSH)</div>
+      <p className="mt-1 text-fg-3">Comparez avec l’empreinte affichée par votre hébergeur, ou par « ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub » sur la machine. Orbit refusera toute autre clé ensuite.</p>
       {fp ? (
         <div className="mt-2 flex items-center gap-2">
           <code className="selectable flex-1 truncate rounded-[7px] bg-black/30 px-2 py-1 font-mono text-[11.5px] text-fg-2">{fp.algorithm} {fp.fingerprint}</code>
@@ -131,7 +131,7 @@ function EnginesList({ m }: { m: RemoteMachine }) {
           </div>
         </div>
       ))}
-      <p className="px-1 text-[11.5px] leading-relaxed text-fg-4">Connexion des moteurs : sur le serveur, par vous (« claude » puis /login, « codex login », ou « orbit-runtime secrets set anthropic »). Orbit ne copie jamais vos identifiants de ce Mac.</p>
+      <p className="px-1 text-[11.5px] leading-relaxed text-fg-4">Connexion des moteurs : sur la machine, par vous (« claude » puis /login, « codex login », ou « orbit-runtime secrets set anthropic »). Orbit ne copie jamais vos identifiants de ce Mac.</p>
       <Button
         size="xs"
         variant="ghost"
@@ -172,7 +172,7 @@ function SchedulerPanel({ m }: { m: RemoteMachine }) {
           {a.ownerState === 'transferring' ? <Badge tone="warning">Transfert…</Badge> : a.status === 'active' ? <span className="text-fg-3">{a.nextRunAt ? relative(a.nextRunAt) : '—'}</span> : <Badge>En pause</Badge>}
         </button>
       ))}
-      {owned.length === 0 && <p className="px-1 text-[12px] text-fg-3">Aucune automatisation planifiée sur ce serveur. Depuis Automatisations, « Lieu d’exécution » la confie au serveur.</p>}
+      {owned.length === 0 && <p className="px-1 text-[12px] text-fg-3">Aucune automatisation planifiée sur cette machine. Depuis Automatisations, « Lieu d’exécution » la confie au serveur.</p>}
     </div>
   )
 }
@@ -205,7 +205,7 @@ function SecurityPanel({ m }: { m: RemoteMachine }) {
   const clients = useQuery({ queryKey: ['machines', 'clients', m.id], queryFn: () => call('runtime.clients', { id: m.id }), enabled: m.status === 'online' })
   const [limits, setLimits] = useState<MachineLimits | null>(null)
   const [dirty, setDirty] = useState(false)
-  const save = useAction('runtime.setLimits', { success: 'Limites appliquées par le serveur', onSuccess: () => setDirty(false) })
+  const save = useAction('runtime.setLimits', { success: 'Limites appliquées par la machine', onSuccess: () => setDirty(false) })
   // Background refetches must not wipe edits that have not been applied yet.
   useEffect(() => {
     if (!dirty) setLimits(m.limits ?? { maxConcurrentMissions: 2, maxMissionDurationMin: 120, dailyBudgetUsd: null, monthlyBudgetUsd: null })
@@ -239,7 +239,7 @@ function SecurityPanel({ m }: { m: RemoteMachine }) {
       </div>
       {limits && (
         <div>
-          <div className="mb-1.5 flex items-center gap-1.5 text-[12.5px] font-medium text-fg"><SlidersHorizontal className="size-3.5 text-fg-3" /> Limites appliquées par le serveur</div>
+          <div className="mb-1.5 flex items-center gap-1.5 text-[12.5px] font-medium text-fg"><SlidersHorizontal className="size-3.5 text-fg-3" /> Limites appliquées par la serveur</div>
           <div className="grid grid-cols-4 gap-2">
             <div><Label>Missions simultanées</Label><Input type="number" min={1} max={16} value={limits.maxConcurrentMissions} onChange={(e) => edit({ ...limits, maxConcurrentMissions: Math.max(1, Math.min(16, Number(e.target.value) || 1)) })} /></div>
             <div><Label>Durée max. (min)</Label><Input type="number" min={1} max={1440} value={limits.maxMissionDurationMin} onChange={(e) => edit({ ...limits, maxMissionDurationMin: Math.max(1, Math.min(1440, Number(e.target.value) || 1)) })} /></div>
@@ -318,7 +318,7 @@ function RemoteCard({ m }: { m: RemoteMachine }) {
                 <div className="grid grid-cols-5 gap-2">
                   <Metric icon={<Rocket />} label="En cours" value={String(h?.missions.running ?? m.runningMissions)} />
                   <Metric icon={<CalendarClock />} label="En attente" value={String(h?.missions.queued ?? 0)} />
-                  <Metric icon={<ShieldCheck />} label="Approbations" value={String(m.pendingApprovals)} warn={m.pendingApprovals > 0} />
+                  <Metric icon={<ShieldCheck />} label="Accords demandés" value={String(m.pendingApprovals)} warn={m.pendingApprovals > 0} />
                   <Metric icon={<Check />} label="Terminées 24 h" value={h ? String(h.missions.done24h) : '—'} />
                   <Metric icon={<AlertTriangle />} label="Échecs 24 h" value={h ? String(h.missions.failed24h) : '—'} warn={Boolean(h?.missions.failed24h)} />
                 </div>
@@ -432,7 +432,7 @@ function AddMachineWizard({ open, onClose }: { open: boolean; onClose: () => voi
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       {open && (
-        <DialogContent title="Connecter une machine" description="Orbit se connecte par SSH avec votre clé, vérifie l’identité du serveur et celle de son runtime. Aucun service n’est exposé sur Internet, rien n’est installé sans votre accord." className="w-[620px]">
+        <DialogContent title="Connecter une machine" description="Orbit se connecte par SSH avec votre clé, vérifie l’identité de la machine et celle de son runtime. Aucun service n’est exposé sur Internet, rien n’est installé sans votre accord." className="w-[620px]">
           <div className="px-5 pb-5">
             <ol className="mb-4 flex items-center gap-1 text-[11.5px]">
               {STEPS.map((s, i) => (
@@ -536,7 +536,7 @@ export function MachinesPage() {
     <Page wide>
       <PageHeader
         title="Machines"
-        subtitle={list.length ? `${online}/${list.length} serveur${list.length > 1 ? 's' : ''} en ligne · ${list.reduce((s, m) => s + m.remoteCompanions, 0)} compagnon(s) distant(s) · ${list.reduce((s, m) => s + m.activeAutomations, 0)} automatisation(s) sur serveur` : 'Où vos compagnons s’exécutent. Un serveur continue de travailler quand ce Mac est éteint.'}
+        subtitle={list.length ? `${online}/${list.length} machine${list.length > 1 ? 's' : ''} en ligne · ${list.reduce((s, m) => s + m.remoteCompanions, 0)} compagnon(s) distant(s) · ${list.reduce((s, m) => s + m.activeAutomations, 0)} automatisation(s) sur serveur` : 'Où vos compagnons s’exécutent. Un serveur continue de travailler quand ce Mac est éteint.'}
         actions={
           <Button variant="secondary" onClick={() => setAdding(true)}>
             <Plus /> Connecter une machine
@@ -551,12 +551,12 @@ export function MachinesPage() {
               <div className="flex items-center gap-3">
                 <span className="flex size-10 items-center justify-center rounded-[11px] bg-white/[0.03]"><Cloud className="size-5 text-fg-3" /></span>
                 <div>
-                  <div className="text-[15px] font-medium text-fg-2">Aucun serveur</div>
+                  <div className="text-[15px] font-medium text-fg-2">Aucune machine</div>
                   <div className="text-xs text-fg-3">Serveur Linux ou VPS · via SSH</div>
                 </div>
               </div>
               <p className="mt-3 text-[13px] leading-relaxed text-fg-3">
-                Installez « orbit-runtime » sur un serveur : vos compagnons y exécutent missions, constellations et automatisations même quand ce Mac est éteint. Orbit s’y connecte par SSH, vérifie l’identité du serveur et du runtime, puis retrouve tout l’historique à chaque reconnexion.
+                Installez « orbit-runtime » sur une machine Linux : vos compagnons y exécutent missions, constellations et automatisations même quand ce Mac est éteint. Orbit s’y connecte par SSH, vérifie l’identité du serveur et du runtime, puis retrouve tout l’historique à chaque reconnexion.
               </p>
               <Button size="sm" variant="secondary" className="mt-3" onClick={() => setAdding(true)}><Plus /> Connecter une machine</Button>
             </section>

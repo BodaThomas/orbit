@@ -114,7 +114,7 @@ export class ConversationManager {
     }
     const secret = adapter.requiresSecret ? this.providers.secretFor(agent.providerId) : null
     if (adapter.requiresSecret && !secret) {
-      throw new OrbitError('provider', `Connectez ${adapter.name} dans Paramètres → Fournisseurs pour parler à ${agent.name}.`)
+      throw new OrbitError('provider', `Connectez ${adapter.name} dans Paramètres → Moteurs pour parler à ${agent.name}.`)
     }
 
     const history = this.messages(conversationId)

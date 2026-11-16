@@ -55,10 +55,10 @@ function GlobalStatus() {
   const label = pending
     ? `${pending} demande${pending > 1 ? 's' : ''} en attente`
     : worst === 'operational'
-      ? 'Tous les fournisseurs sont opérationnels'
+      ? 'Tous les moteurs sont opérationnels'
       : worst === 'unknown'
-        ? 'Statut des fournisseurs inconnu'
-        : `Un fournisseur est ${worst === 'degraded' ? 'dégradé' : 'en incident'}`
+        ? 'Statut des moteurs inconnu'
+        : `Un moteur est ${worst === 'degraded' ? 'dégradé' : 'en incident'}`
   const dot = pending ? 'bg-warning orbit-blip' : HEALTH_META[worst].dot
   return (
     <Tooltip content={label} side="bottom">
@@ -167,14 +167,14 @@ function ProvidersSection() {
           className="flex items-center gap-1 rounded-[5px] text-[12.5px] font-medium text-fg-3 outline-none hover:text-fg-2 focus-visible:text-fg"
         >
           <ChevronRight className={cn('size-3 transition-transform duration-200', expanded && 'rotate-90')} />
-          Fournisseurs · Consommation
+          Moteurs · Consommation
         </button>
-        {!expanded && <span className={cn('size-[7px] rounded-full', HEALTH_META[worst].dot)} title="Statut des fournisseurs" />}
+        {!expanded && <span className={cn('size-[7px] rounded-full', HEALTH_META[worst].dot)} title="Statut des moteurs" />}
       </div>
       <button onClick={() => navigate('/analytics')} className="w-full rounded-[11px] px-2.5 py-1 text-left hover:bg-white/[0.02]">
         <div className="flex items-center justify-between">
           <span className="flex items-center gap-1.5 text-[13px] text-fg-2">
-            Aujourd’hui {expanded && <span className={cn('size-[6px] rounded-full', HEALTH_META[worst].dot)} title="Statut des fournisseurs" />}
+            Aujourd’hui {expanded && <span className={cn('size-[6px] rounded-full', HEALTH_META[worst].dot)} title="Statut des moteurs" />}
           </span>
           {expanded ? <BarChart3 className="size-3.5 text-fg-3" /> : <span className="flex items-baseline gap-0.5 tabular"><span className="text-[15px] font-semibold text-fg">{parts.value}</span><span className="text-[12px] text-fg-2">{parts.currency}</span></span>}
         </div>

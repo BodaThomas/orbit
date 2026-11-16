@@ -125,7 +125,7 @@ export function OverviewPage() {
             ]}
             action={
               <Button variant="primary" onClick={() => navigate('/companions/new')}>
-                <Plus /> Créer un compagnon
+                <Plus /> Nouveau compagnon
               </Button>
             }
           />
@@ -153,7 +153,7 @@ export function OverviewPage() {
                 ))}
               </span>
             </PulseCell>
-            <PulseCell label="À traiter" foot={todo ? [pendingApprovals && `${pendingApprovals} approbation${pendingApprovals > 1 ? 's' : ''}`, failing.length && `${failing.length} échec${failing.length > 1 ? 's' : ''}`].filter(Boolean).join(' · ') : 'Tout est en ordre'}>
+            <PulseCell label="À traiter" foot={todo ? [pendingApprovals && `${pendingApprovals} accord${pendingApprovals > 1 ? 's' : ''} demandé${pendingApprovals > 1 ? 's' : ''}`, failing.length && `${failing.length} échec${failing.length > 1 ? 's' : ''}`].filter(Boolean).join(' · ') : 'Tout est en ordre'}>
               <span className={cn('text-[22px] leading-7 font-semibold tracking-[-0.02em] tabular', todo ? 'text-warning' : 'text-fg')}>{todo}</span>
               {todo ? <span className="orbit-blip mb-2 size-2 rounded-full bg-warning" /> : <CheckCircle2 className="mb-1 size-4 text-success" />}
             </PulseCell>
@@ -217,7 +217,7 @@ export function OverviewPage() {
                     </span>
                     <span>
                       <span className="block text-[13px] text-fg">Tout est en ordre</span>
-                      <span className="block text-[12px] text-fg-3">Aucune approbation ni erreur en attente.</span>
+                      <span className="block text-[12px] text-fg-3">Aucune demande d’accord ni erreur en attente.</span>
                     </span>
                   </div>
                 ) : (

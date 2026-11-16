@@ -23,7 +23,7 @@ const STEPS = [
   { key: 'identity', label: 'Identité' },
   { key: 'look', label: 'Personnage' },
   { key: 'planet', label: 'Planète' },
-  { key: 'mind', label: 'Intelligence' },
+  { key: 'mind', label: 'Moteur' },
   { key: 'frame', label: 'Cadre' },
 ] as const
 
@@ -347,7 +347,7 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
           {step === 3 && (
             <div className="space-y-5">
               <div>
-                <Label>Fournisseur</Label>
+                <Label>Moteur</Label>
                 <div className="grid grid-cols-2 gap-2">
                   {providers.data?.map((p) => {
                     const disabled = p.availability !== 'available'
@@ -381,7 +381,7 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
                   <p className="mt-2 text-xs text-fg-3">
                     Vous pourrez connecter {provider.name} dans{' '}
                     <button className="text-accent hover:underline" onClick={() => navigate('/settings/providers')}>
-                      Paramètres → Fournisseurs
+                      Paramètres → Moteurs
                     </button>
                     . Le compagnon sera créé dès maintenant.
                   </p>
@@ -456,7 +456,7 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
                 </div>
                 {draft.autonomy === 'autonomous' && (
                   <p className="mt-2 rounded-[10px] bg-warning/[0.08] px-3 py-2 text-xs leading-relaxed text-fg-2 ring-1 ring-warning/30">
-                    Autonomie complète : ce compagnon ne vous demandera jamais d’accord. Installations, Git distant, suppressions, déploiements, secrets et outils externes s’exécutent sans confirmation (et sans le bac à sable des commandes de Claude), puis sont journalisés. Seules les permissions désactivées ci‑dessous et les données d’Orbit restent bloquées — réduisez-les pour borner ce qu’il peut faire, et activez l’isolation renforcée pour garder une barrière du système.
+                    Mode autonome : ce compagnon ne vous demandera jamais d’accord. Installations, Git distant, suppressions, déploiements, secrets et outils externes s’exécutent sans confirmation (et sans le bac à sable des commandes de Claude), puis sont journalisés. Seules les permissions désactivées ci‑dessous et les données d’Orbit restent bloquées — réduisez-les pour borner ce qu’il peut faire, et activez l’isolation renforcée pour garder une barrière du système.
                   </p>
                 )}
               </div>
@@ -478,13 +478,13 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
                 </div>
                 <p className="mt-2 text-xs leading-relaxed text-fg-3">
                   {provider?.capabilities.kind === 'agent'
-                    ? `Chaque action de ${provider.name} est vérifiée par Orbit avant de s’exécuter, uniquement dans le dossier autorisé. Une permission désactivée bloque l’action ; ${draft.autonomy === 'autonomous' ? 'en autonomie complète, tout ce que ces permissions autorisent s’exécute sans jamais vous solliciter' : draft.autonomy === 'automated' ? 'en mode automatique, seules les actions sensibles vous sont soumises' : draft.autonomy === 'supervised' ? 'en mode supervisé, lectures, modifications, tests et compilation se font sans vous déranger ; installations, déploiements, Git distant ou destructif, secrets et suppressions massives attendent votre accord' : 'en mode manuel, chaque modification, commande ou accès réseau attend votre accord'}.`
-                    : `Ce fournisseur répond sans outils : ces permissions s’appliqueront s’il passe sur un moteur agent${sensitive.length > 0 && draft.autonomy === 'supervised' ? '. En mode supervisé, chaque mission demandera votre approbation' : ''}.`}
+                    ? `Chaque action de ${provider.name} est vérifiée par Orbit avant de s’exécuter, uniquement dans le dossier de travail. Une permission désactivée bloque l’action ; ${draft.autonomy === 'autonomous' ? 'en mode autonome, tout ce que ces permissions autorisent s’exécute sans jamais vous solliciter' : draft.autonomy === 'automated' ? 'en mode automatique, seules les actions sensibles vous sont soumises' : draft.autonomy === 'supervised' ? 'en mode supervisé, lectures, modifications, tests et compilation se font sans vous déranger ; installations, déploiements, Git distant ou destructif, secrets et suppressions massives attendent votre accord' : 'en mode manuel, chaque modification, commande ou accès réseau attend votre accord'}.`
+                    : `Ce moteur répond sans outils : ces permissions s’appliqueront s’il passe sur un moteur agent${sensitive.length > 0 && draft.autonomy === 'supervised' ? '. En mode supervisé, chaque mission demandera votre approbation' : ''}.`}
                 </p>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <Label hint={provider?.capabilities.kind === 'agent' ? 'Requis : seul dossier accessible' : undefined}>Dossier autorisé</Label>
+                  <Label hint={provider?.capabilities.kind === 'agent' ? 'Requis : seul dossier accessible' : undefined}>Dossier de travail</Label>
                   <div className="flex gap-2">
                     <Input readOnly value={draft.runtime === 'remote' ? `Sur la machine distante : projects/${draft.workingDirectory ?? ''}` : (draft.workingDirectory ?? '')} placeholder="Aucun" className="text-fg-2" disabled={draft.runtime === 'remote'} />
                     <Button

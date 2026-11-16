@@ -46,7 +46,7 @@ describe('agent missions (engine + runner + persistence)', () => {
   it('requires an authorised folder for engine companions', () => {
     const core = setup('codex', async (req) => ok(req))
     const noFolder = core.agents.create(novaInput({ name: 'Sans dossier', providerId: 'codex', model: 'default', workingDirectory: null }))
-    expect(() => core.missions.create({ title: 'x', description: '', agentId: noFolder.id, priority: 'normal', startNow: false })).toThrow(/dossier autorisé/)
+    expect(() => core.missions.create({ title: 'x', description: '', agentId: noFolder.id, priority: 'normal', startNow: false })).toThrow(/dossier de travail/)
     const home = core.agents.create(novaInput({ name: 'Maison', providerId: 'codex', model: 'default', workingDirectory: process.env.HOME! }))
     expect(() => core.missions.create({ title: 'x', description: '', agentId: home.id, priority: 'normal', startNow: false })).toThrow(/dossier personnel/)
   })
@@ -221,7 +221,7 @@ describe('agent missions (engine + runner + persistence)', () => {
 
     // Automation + supervised + sensitive permissions → the start needs the user's approval.
     expect(core.missions.followUp(m.id, 'Continue avec les tests', 'automation').status).toBe('approval_required')
-    expect(() => core.missions.start(m.id, 'automation')).toThrow(/approbation en attente/)
+    expect(() => core.missions.start(m.id, 'automation')).toThrow(/accord en attente/)
     const approval = core.missions.approvals('pending').find((a) => a.kind === 'mission_start')!
     core.missions.resolveApproval(approval.id, true)
     await waitFor(() => core.missions.get(m.id).status === 'done')

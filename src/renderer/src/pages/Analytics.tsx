@@ -155,7 +155,7 @@ function SubscriptionPanel() {
       <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] gap-4">
         <div className="space-y-2 text-[13px]">
           {[
-            ['Dépense API mesurée', money(u.month.official), 'Montant renvoyé par un fournisseur'],
+            ['Dépense API mesurée', money(u.month.official), 'Montant renvoyé par le moteur'],
             ['Coût API estimé', money(u.month.estimated), 'Tarifs publics datés'],
             ['Utilisation via abonnement', sub.requests ? `Inclus dans votre abonnement — ${integer(sub.tokens)} jetons` : 'Aucune', `${integer(sub.requests)} requête${sub.requests > 1 ? 's' : ''}`],
             ['Équivalent théorique au tarif API', sub.equivalentUsd != null ? `≈ ${money(sub.equivalentUsd)}` : '—', 'Indicatif, non facturé'],
@@ -332,8 +332,8 @@ export function AnalyticsPage() {
             )
           })}
         </Panel>
-        <Panel title={<span>Fournisseurs <span className="font-normal text-fg-3">· aujourd’hui</span></span>}>
-          {u.byProviderToday.length === 0 && <OrbitEmptyState compact title="Aucune requête aujourd’hui" body="La répartition par fournisseur s’affichera dès la première requête." />}
+        <Panel title={<span>Moteurs <span className="font-normal text-fg-3">· aujourd’hui</span></span>}>
+          {u.byProviderToday.length === 0 && <OrbitEmptyState compact title="Aucune requête aujourd’hui" body="La répartition par moteur s’affichera dès la première requête." />}
           {u.byProviderToday.length > 0 && (
             <div className="px-2.5 pt-1 pb-2">
               <div className="flex h-2 gap-0.5 overflow-hidden rounded-full">

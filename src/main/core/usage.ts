@@ -122,7 +122,7 @@ export class UsageTracker {
       return `Budget journalier de ${agent.name} atteint (${agent.dailyBudgetUsd.toFixed(2)} $).`
     }
     if (s.dailyLimitUsd != null && this.spentToday() >= s.dailyLimitUsd) {
-      return `Limite journalière globale atteinte (${s.dailyLimitUsd.toFixed(2)} $).`
+      return `Budget journalier global atteinte (${s.dailyLimitUsd.toFixed(2)} $).`
     }
     if (s.monthlyBudgetUsd != null && this.spentThisMonth() >= s.monthlyBudgetUsd) {
       return `Budget mensuel atteint (${s.monthlyBudgetUsd.toFixed(2)} $).`

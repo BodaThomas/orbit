@@ -105,7 +105,7 @@ export function ApprovalRequestCard({ approval, agent, expanded = false }: { app
 
           <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
             <Button size="xs" variant="success" disabled={blocked} onClick={() => resolve.mutate({ id: approval.id, approve: true, scope: 'once' })}>
-              <Check /> {approval.kind === 'tool_use' ? 'Autoriser une fois' : 'Approuver'}
+              <Check /> {approval.kind === 'tool_use' ? 'Autoriser une fois' : 'Autoriser'}
             </Button>
             {canMission && (
               <Tooltip content={`${grant!.label} — jusqu’à la fin de cette mission`}>

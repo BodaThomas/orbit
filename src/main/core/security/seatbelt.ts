@@ -113,14 +113,14 @@ export function selfTest(): ConfinementProof {
       return spawnSync(c.command, c.args, { cwd: ws, encoding: 'utf8', timeout: 10_000 })
     }
     const checks = [
-      { label: 'Lecture dans le dossier autorisé', ok: run('/bin/cat', [join(ws, 'inside.txt')]).stdout === 'inside\n' },
+      { label: 'Lecture dans le dossier de travail', ok: run('/bin/cat', [join(ws, 'inside.txt')]).stdout === 'inside\n' },
       { label: 'Lecture de l’état du moteur', ok: run('/bin/cat', [join(engineDir, 'state')]).status === 0 },
       { label: 'Lecture hors du dossier refusée', ok: run('/bin/cat', [join(home, 'secret.txt')]).status !== 0 },
       { label: 'Clé SSH factice illisible', ok: run('/bin/cat', [join(home, '.ssh', 'id_ed25519')]).status !== 0 },
       { label: 'Lien symbolique vers l’extérieur bloqué', ok: run('/bin/cat', [join(ws, 'lien.txt')]).status !== 0 },
       { label: 'Sous-processus (sh -c) confiné', ok: run('/bin/sh', ['-c', `cat ${q(join(home, 'secret.txt'))}`]).status !== 0 },
       { label: 'Écriture hors du dossier refusée', ok: run('/bin/sh', ['-c', `echo x > ${q(join(home, 'pirate.txt'))}`]).status !== 0 && !existsSync(join(home, 'pirate.txt')) },
-      { label: 'Écriture dans le dossier autorisée', ok: run('/bin/sh', ['-c', `echo x > ${q(join(ws, 'ok.txt'))}`]).status === 0 },
+      { label: 'Écriture dans le dossier de travail', ok: run('/bin/sh', ['-c', `echo x > ${q(join(ws, 'ok.txt'))}`]).status === 0 },
     ]
     return { ok: checks.every((c) => c.ok), checkedAt, checks, error: null }
   } catch (err) {

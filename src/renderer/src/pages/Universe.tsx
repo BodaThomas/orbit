@@ -228,7 +228,7 @@ export function UniversePage() {
           <OrbitEmptyState
             title="Un univers encore vide"
             body="Chaque compagnon que vous créez prend place ici, sur sa planète, en orbite autour de vous."
-            action={<Button variant="primary" onClick={() => navigate('/companions/new')}><Plus /> Créer un compagnon</Button>}
+            action={<Button variant="primary" onClick={() => navigate('/companions/new')}><Plus /> Nouveau compagnon</Button>}
           />
         </div>
       ) : (

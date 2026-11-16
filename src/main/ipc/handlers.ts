@@ -30,7 +30,7 @@ export const handlers: Handlers = {
   'app.setMode': (i, h) => h.setMode(i.mode),
   'app.openStatusPage': async (i, h) => {
     const page = h.runtime().providers.adapter(i.providerId).statusPage?.page
-    if (!page) throw new OrbitError('not_found', 'Aucune page de statut pour ce fournisseur.')
+    if (!page) throw new OrbitError('not_found', 'Aucune page de statut pour ce moteur.')
     await h.openExternal(page)
   },
   'app.chooseDirectory': (_i, h) => h.chooseDirectory(),

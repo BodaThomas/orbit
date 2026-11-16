@@ -132,7 +132,7 @@ export function OnboardingPage() {
               </div>
               <h1 className="mt-8 text-[30px] font-semibold tracking-[-0.02em] text-fg">Construisez votre univers</h1>
               <p className="mx-auto mt-3 max-w-lg text-[15px] leading-relaxed text-fg-2">
-                Chaque compagnon a un nom, un rôle, un fournisseur IA et sa propre planète. Vous leur parlez, leur confiez des missions et suivez leur travail — sans jamais perdre le contrôle.
+                Chaque compagnon a un nom, un rôle, un moteur IA et sa propre planète. Vous leur parlez, leur confiez des missions et suivez leur travail — sans jamais perdre le contrôle.
               </p>
               <Button size="lg" variant="primary" className="mt-8" onClick={next}>
                 Continuer <ArrowRight />
@@ -142,8 +142,8 @@ export function OnboardingPage() {
 
           {step === 2 && (
             <>
-              <h1 className="text-[30px] font-semibold tracking-[-0.02em] text-fg">Connectez une intelligence</h1>
-              <p className="mx-auto mt-3 max-w-lg text-[15px] text-fg-2">Votre clé est vérifiée puis chiffrée dans le Trousseau macOS. Elle ne quitte jamais Orbit, sauf vers le fournisseur concerné.</p>
+              <h1 className="text-[30px] font-semibold tracking-[-0.02em] text-fg">Connectez un moteur</h1>
+              <p className="mx-auto mt-3 max-w-lg text-[15px] text-fg-2">Votre clé est vérifiée puis chiffrée dans le Trousseau macOS. Elle ne quitte jamais Orbit, sauf vers le service concerné.</p>
               <div className="mt-7 divide-y divide-line rounded-2xl bg-surface/90 text-left ring-1 ring-line backdrop-blur">
                 {anthropic && <ProviderConnect provider={anthropic} />}
                 {openai && <ProviderConnect provider={openai} />}
@@ -229,7 +229,7 @@ export function OnboardingPage() {
                 <CompanionAvatar appearance={agent.appearance} variant="detailed" size={150} seed={agent.id} animated />
               </div>
               <h1 className="mt-2 text-[30px] font-semibold tracking-[-0.02em] text-fg">Première mission</h1>
-              <p className="mt-2 text-[15px] text-fg-2">{connected ? `Dites bonjour à ${agent.name}, ou confiez-lui une première tâche.` : `Connectez un fournisseur plus tard pour que ${agent.name} puisse vous répondre.`}</p>
+              <p className="mt-2 text-[15px] text-fg-2">{connected ? `Dites bonjour à ${agent.name}, ou confiez-lui une première tâche.` : `Connectez un moteur plus tard pour que ${agent.name} puisse vous répondre.`}</p>
               {connected ? (
                 <Textarea value={message} onChange={(e) => setMessage(e.target.value)} placeholder={`Bonjour ${agent.name} ! Aide-moi à organiser ma semaine.`} className="mx-auto mt-6 min-h-24 max-w-md bg-surface/80 text-[14px]" autoFocus />
               ) : null}

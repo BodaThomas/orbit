@@ -93,7 +93,7 @@ function toolResultText(content: unknown): string {
 }
 
 function mapSdkError(message: string): EngineError {
-  if (/api key|authentication|401|unauthori[sz]ed|invalid x-api-key/i.test(message)) return new EngineError('auth', 'Clé API Anthropic refusée. Vérifiez-la dans Paramètres → Fournisseurs.')
+  if (/api key|authentication|401|unauthori[sz]ed|invalid x-api-key/i.test(message)) return new EngineError('auth', 'Clé API Anthropic refusée. Vérifiez-la dans Paramètres → Moteurs.')
   if (/rate.?limit|429|overloaded/i.test(message)) return new EngineError('rate_limit', 'Limite de débit Anthropic atteinte, réessayez dans un instant.')
   if (/ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|network|fetch failed|connection/i.test(message)) return new EngineError('network', 'Impossible de joindre l’API Anthropic.')
   return new EngineError('unknown', message)

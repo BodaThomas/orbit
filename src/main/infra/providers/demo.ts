@@ -14,7 +14,7 @@ function reply(req: StreamRequest): string {
   const name = /Tu es (\w+)/.exec(req.system)?.[1] ?? 'Votre compagnon'
   const topic = last.length > 80 ? `${last.slice(0, 80).trim()}…` : last
   return [
-    `*Réponse de démonstration générée localement — aucun fournisseur n’a été contacté.*`,
+    `*Réponse de démonstration générée localement — aucun moteur n’a été contacté.*`,
     ``,
     `${name} a bien reçu : « ${topic} »`,
     ``,
@@ -28,7 +28,7 @@ function reply(req: StreamRequest): string {
     `const mission = { titre: ${JSON.stringify(topic.slice(0, 40))}, statut: 'en cours' }`,
     '```',
     ``,
-    `Connectez un fournisseur dans **Paramètres → Fournisseurs** pour obtenir de vraies réponses.`,
+    `Connectez un moteur dans **Paramètres → Moteurs** pour obtenir de vraies réponses.`,
   ].join('\n')
 }
 

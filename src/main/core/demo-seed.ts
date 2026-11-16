@@ -65,7 +65,7 @@ export function seedDemo(db: OrbitDb, agents: AgentManager, settings: SettingsSt
   const mEcho = m('echo', 'Rapport hebdomadaire des coûts', 'approval_required', 40)
   m('nova', 'Préparer la revue de la semaine', 'done', 180, { finishedAt: ago(170), result: 'Revue prête : 4 missions terminées, 1 en attente.', costUsd: 0.042, costKind: 'estimated' })
   m('milo', 'Synthèse sur les bases vectorielles locales', 'done', 600, { finishedAt: ago(585), costUsd: 0.118, costKind: 'estimated' })
-  m('atlas', 'Corriger le build macOS arm64', 'failed', 900, { finishedAt: ago(890), error: 'Délai dépassé côté fournisseur (démo).' })
+  m('atlas', 'Corriger le build macOS arm64', 'failed', 900, { finishedAt: ago(890), error: 'Délai dépassé côté moteur (démo).' })
   m('nova', 'Trier les notes de réunion', 'todo', 30)
 
   const exId = newId()
@@ -106,9 +106,9 @@ export function seedDemo(db: OrbitDb, agents: AgentManager, settings: SettingsSt
   act('atlas', 'file.written', 'info', 'Fichier modifié', 'src/main/core/missions.ts', 8)
   act('milo', 'mission.started', 'info', 'Milo a démarré une mission', 'Comparer les SDK d’agents disponibles', 25)
   act('milo', 'tool.called', 'info', 'Recherche web', '« claude agent sdk permissions »', 18)
-  act('echo', 'approval.requested', 'warning', 'Approbation demandée', 'Echo demande à démarrer « Rapport hebdomadaire des coûts »', 40)
+  act('echo', 'approval.requested', 'warning', 'Accord demandé', 'Echo demande à démarrer « Rapport hebdomadaire des coûts »', 40)
   act('nova', 'mission.completed', 'success', 'Nova a terminé une mission', 'Préparer la revue de la semaine', 170)
-  act('atlas', 'mission.failed', 'error', 'Échec de la mission d’Atlas', 'Délai dépassé côté fournisseur (démo).', 890)
+  act('atlas', 'mission.failed', 'error', 'Échec de la mission d’Atlas', 'Délai dépassé côté moteur (démo).', 890)
 
   // Usage over 30 days (fictional, estimated)
   const keys = ['nova', 'atlas', 'milo', 'echo']
