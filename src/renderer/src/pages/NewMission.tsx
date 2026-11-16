@@ -57,6 +57,8 @@ export function NewMissionDialog() {
   const defs = constellations.data ?? []
   const chosen = defs.find((d) => d.id === constellationId)
   const submit = () => {
+    // ⌘↵ bypasses the disabled submit button: guard here too.
+    if (launch.isPending || create.isPending) return
     if (mode === 'constellation') {
       if (chosen && title.trim()) launch.mutate({ id: chosen.id, goal: description.trim() ? `${title.trim()}\n\n${description.trim()}` : title.trim() })
       return

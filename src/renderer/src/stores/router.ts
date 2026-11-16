@@ -26,7 +26,7 @@ export const navigate = (path: string) => useRouter.getState().navigate(path)
 /** Matches "/companions/:id/:tab?" style patterns. */
 export function match(pattern: string, path: string): Record<string, string> | null {
   const pp = pattern.split('/').filter(Boolean)
-  const sp = path.split('/').filter(Boolean)
+  const sp = (path.split('?')[0] ?? '').split('/').filter(Boolean)
   const params: Record<string, string> = {}
   for (let i = 0; i < pp.length; i++) {
     const p = pp[i]!

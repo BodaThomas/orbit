@@ -44,15 +44,15 @@ export function App() {
     document.documentElement.dataset.motion = m === 'always' ? 'reduce' : m === 'never' ? 'always' : ''
   }, [settings?.reduceMotion])
 
+  if (boot.isError) {
+    return <div className="flex h-full items-center justify-center text-fg-2">Impossible de démarrer Orbit : {String(boot.error)}</div>
+  }
   if (boot.isLoading || !settings) {
     return (
       <div className="drag flex h-full items-center justify-center">
         <OrbitLogo size={40} className="opacity-60" />
       </div>
     )
-  }
-  if (boot.isError) {
-    return <div className="flex h-full items-center justify-center text-fg-2">Impossible de démarrer Orbit : {String(boot.error)}</div>
   }
 
   return (

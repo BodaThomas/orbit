@@ -69,7 +69,7 @@ function RuntimeIdentityCheck({ m }: { m: RemoteMachine }) {
     <div className={cn('rounded-[11px] p-3 text-[12.5px] ring-1', p.changed ? 'bg-danger/[0.05] ring-danger/25' : 'bg-accent/[0.05] ring-accent/20')}>
       <div className="flex items-center gap-2 text-fg"><Fingerprint className={cn('size-3.5', p.changed ? 'text-danger' : 'text-accent')} /> {p.changed ? 'L’identité du runtime a changé' : 'Vérifiez l’identité du runtime'}</div>
       <p className="mt-1 text-fg-3">
-        {p.changed ? 'Le runtime ne présente plus la clé que vous aviez validée. C’est normal seulement si vous l’avez réinstallé. Sinon, ne confirmez pas.' : 'Chaque runtime a sa propre clé. Comparez avec la sortie de « orbit-runtime doctor » ou le fichier identity/ sur le serveur.'}
+        {p.changed ? 'Le runtime ne présente plus la clé que vous aviez validée. C’est normal seulement si vous l’avez réinstallé. Sinon, ne confirmez pas.' : 'Chaque runtime a sa propre clé. Comparez avec l’identifiant et l’empreinte affichés sur le serveur.'}
         {' '}Commande : <code className="font-mono text-fg-2">orbit-runtime health</code>
       </p>
       <div className="mt-2 flex items-center gap-2">
@@ -196,7 +196,7 @@ function EventsPanel({ m }: { m: RemoteMachine }) {
           {typeof e.data?.version === 'string' && <span className="font-mono text-[11px] text-fg-4">{e.data.version}</span>}
         </div>
       ))}
-      {events.data?.length === 0 && errors.length === 0 && <p className="px-1 text-[12px] text-fg-3">Aucun évènement du runtime pour l’instant.</p>}
+      {events.data?.length === 0 && errors.length === 0 && <p className="px-1 text-[12px] text-fg-3">Aucun événement du runtime pour l’instant.</p>}
     </div>
   )
 }
@@ -204,8 +204,16 @@ function EventsPanel({ m }: { m: RemoteMachine }) {
 function SecurityPanel({ m }: { m: RemoteMachine }) {
   const clients = useQuery({ queryKey: ['machines', 'clients', m.id], queryFn: () => call('runtime.clients', { id: m.id }), enabled: m.status === 'online' })
   const [limits, setLimits] = useState<MachineLimits | null>(null)
-  const save = useAction('runtime.setLimits', { success: 'Limites appliquées par le serveur' })
-  useEffect(() => setLimits(m.limits ?? { maxConcurrentMissions: 2, maxMissionDurationMin: 120, dailyBudgetUsd: null, monthlyBudgetUsd: null }), [m.limits])
+  const [dirty, setDirty] = useState(false)
+  const save = useAction('runtime.setLimits', { success: 'Limites appliquées par le serveur', onSuccess: () => setDirty(false) })
+  // Background refetches must not wipe edits that have not been applied yet.
+  useEffect(() => {
+    if (!dirty) setLimits(m.limits ?? { maxConcurrentMissions: 2, maxMissionDurationMin: 120, dailyBudgetUsd: null, monthlyBudgetUsd: null })
+  }, [m.limits, dirty])
+  const edit = (l: MachineLimits) => {
+    setDirty(true)
+    setLimits(l)
+  }
   const row = (k: string, v: React.ReactNode) => (
     <div className="flex justify-between gap-3 px-3 py-1.5 text-[12.5px]"><dt className="text-fg-3">{k}</dt><dd className="selectable min-w-0 truncate text-right font-mono text-[11.5px] text-fg-2">{v}</dd></div>
   )
@@ -233,10 +241,10 @@ function SecurityPanel({ m }: { m: RemoteMachine }) {
         <div>
           <div className="mb-1.5 flex items-center gap-1.5 text-[12.5px] font-medium text-fg"><SlidersHorizontal className="size-3.5 text-fg-3" /> Limites appliquées par le serveur</div>
           <div className="grid grid-cols-4 gap-2">
-            <div><Label>Missions simultanées</Label><Input type="number" min={1} max={16} value={limits.maxConcurrentMissions} onChange={(e) => setLimits({ ...limits, maxConcurrentMissions: Math.max(1, Math.min(16, Number(e.target.value) || 1)) })} /></div>
-            <div><Label>Durée max. (min)</Label><Input type="number" min={1} max={1440} value={limits.maxMissionDurationMin} onChange={(e) => setLimits({ ...limits, maxMissionDurationMin: Math.max(1, Math.min(1440, Number(e.target.value) || 1)) })} /></div>
-            <div><Label hint="API">Budget / jour ($)</Label><Input type="number" min={0} value={limits.dailyBudgetUsd ?? ''} placeholder="Aucun" onChange={(e) => setLimits({ ...limits, dailyBudgetUsd: e.target.value === '' ? null : Math.max(0, Number(e.target.value)) })} /></div>
-            <div><Label hint="API">Budget / mois ($)</Label><Input type="number" min={0} value={limits.monthlyBudgetUsd ?? ''} placeholder="Aucun" onChange={(e) => setLimits({ ...limits, monthlyBudgetUsd: e.target.value === '' ? null : Math.max(0, Number(e.target.value)) })} /></div>
+            <div><Label>Missions simultanées</Label><Input type="number" min={1} max={16} value={limits.maxConcurrentMissions} onChange={(e) => edit({ ...limits, maxConcurrentMissions: Math.max(1, Math.min(16, Number(e.target.value) || 1)) })} /></div>
+            <div><Label>Durée max. (min)</Label><Input type="number" min={1} max={1440} value={limits.maxMissionDurationMin} onChange={(e) => edit({ ...limits, maxMissionDurationMin: Math.max(1, Math.min(1440, Number(e.target.value) || 1)) })} /></div>
+            <div><Label hint="API">Budget / jour ($)</Label><Input type="number" min={0} value={limits.dailyBudgetUsd ?? ''} placeholder="Aucun" onChange={(e) => edit({ ...limits, dailyBudgetUsd: e.target.value === '' ? null : Math.max(0, Number(e.target.value)) })} /></div>
+            <div><Label hint="API">Budget / mois ($)</Label><Input type="number" min={0} value={limits.monthlyBudgetUsd ?? ''} placeholder="Aucun" onChange={(e) => edit({ ...limits, monthlyBudgetUsd: e.target.value === '' ? null : Math.max(0, Number(e.target.value)) })} /></div>
           </div>
           <div className="mt-2 flex items-center gap-3">
             <p className="flex-1 text-[11.5px] text-fg-4">Appliquées par le runtime à chaque mission, quoi que demande un client. Les abonnements n’ont pas de prix : seuls les coûts API mesurés ou estimés comptent.</p>
@@ -299,7 +307,7 @@ function RemoteCard({ m }: { m: RemoteMachine }) {
               { value: 'overview', label: 'Aperçu' },
               { value: 'engines', label: 'Moteurs', count: m.engines.filter((e) => e.available).length },
               { value: 'scheduler', label: 'Planificateur', count: m.activeAutomations },
-              { value: 'events', label: 'Évènements', count: h?.lastErrors.length ?? null },
+              { value: 'events', label: 'Événements', count: h?.lastErrors.length ?? null },
               { value: 'security', label: 'Sécurité' },
             ]}
           />
@@ -310,7 +318,7 @@ function RemoteCard({ m }: { m: RemoteMachine }) {
                 <div className="grid grid-cols-5 gap-2">
                   <Metric icon={<Rocket />} label="En cours" value={String(h?.missions.running ?? m.runningMissions)} />
                   <Metric icon={<CalendarClock />} label="En attente" value={String(h?.missions.queued ?? 0)} />
-                  <Metric icon={<ShieldCheck />} label="Accords" value={String(m.pendingApprovals)} warn={m.pendingApprovals > 0} />
+                  <Metric icon={<ShieldCheck />} label="Approbations" value={String(m.pendingApprovals)} warn={m.pendingApprovals > 0} />
                   <Metric icon={<Check />} label="Terminées 24 h" value={h ? String(h.missions.done24h) : '—'} />
                   <Metric icon={<AlertTriangle />} label="Échecs 24 h" value={h ? String(h.missions.failed24h) : '—'} warn={Boolean(h?.missions.failed24h)} />
                 </div>
@@ -327,7 +335,7 @@ function RemoteCard({ m }: { m: RemoteMachine }) {
             {tab === 'engines' && <EnginesList m={m} />}
             {tab === 'scheduler' && <SchedulerPanel m={m} />}
             {tab === 'events' && <EventsPanel m={m} />}
-            {tab === 'security' && <SecurityPanel m={m} />}
+            {tab === 'security' && <SecurityPanel key={m.id} m={m} />}
           </div>
         </>
       )}
@@ -343,7 +351,13 @@ function RemoteCard({ m }: { m: RemoteMachine }) {
             size="sm"
             variant="ghost"
             onClick={async () => {
-              const plan = await call('runtime.deployPlan', { id: m.id })
+              let plan: string[]
+              try {
+                plan = await call('runtime.deployPlan', { id: m.id })
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : String(err))
+                return
+              }
               const ok = await confirm({ title: `Installer le runtime sur ${m.name} ?`, body: `Orbit exécutera exactement, par SSH :\n\n${plan.map((c, i) => `${i + 1}. ${c}`).join('\n')}\n\nRien d’autre n’est installé ni modifié.`, confirm: 'Installer' })
               if (ok) deploy.mutate({ id: m.id })
             }}

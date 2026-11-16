@@ -125,14 +125,23 @@ function Composer({ agent, conversationId, streaming, onSent }: { agent: Agent; 
     el.style.height = `${Math.min(220, el.scrollHeight)}px`
   }, [text])
 
+  // Synchronous guard: a second Enter before the first message's conversation exists must not create another one.
+  const busy = useRef(false)
   const submit = async () => {
     const content = text.trim()
-    if (!content || streaming) return
-    let id = conversationId
-    if (!id) id = (await create.mutateAsync({ agentId: agent.id })).id
-    setText('')
-    send.mutate({ conversationId: id, content }, { onError: () => setText(content) })
-    onSent(id)
+    if (!content || streaming || busy.current) return
+    busy.current = true
+    try {
+      let id = conversationId
+      if (!id) id = (await create.mutateAsync({ agentId: agent.id })).id
+      setText('')
+      send.mutate({ conversationId: id, content }, { onError: () => setText(content) })
+      onSent(id)
+    } catch {
+      // Already toasted by useAction; the text stays in the composer.
+    } finally {
+      busy.current = false
+    }
   }
 
   const disabled = !agent.enabled
@@ -284,7 +293,7 @@ export function ChatPage({ agentId, conversationId }: { agentId: string; convers
               {list.at(-1)?.status === 'error' && (
                 <div className="flex justify-center">
                   <Button size="xs" variant="ghost" onClick={() => document.querySelector<HTMLTextAreaElement>('textarea')?.focus()}>
-                    <RotateCcw /> Réessayer en renvoyant un message
+                    <RotateCcw /> Écrire un nouveau message
                   </Button>
                 </div>
               )}

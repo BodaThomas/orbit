@@ -16,8 +16,8 @@ function dayLabel(iso: string) {
   return d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })
 }
 
-export function ActivityPage() {
-  const [query, setQuery] = useState('')
+export function ActivityPage({ initialQuery = '' }: { initialQuery?: string }) {
+  const [query, setQuery] = useState(initialQuery)
   const [level, setLevel] = useState<ActivityLevel | 'all'>('all')
   const [agentId, setAgentId] = useState('all')
   const agents = useAgents()

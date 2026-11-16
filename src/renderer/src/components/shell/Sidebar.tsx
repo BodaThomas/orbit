@@ -5,8 +5,9 @@ import { Kbd } from '@/components/ui/field'
 import { Popover, PopoverContent, PopoverTrigger, Tooltip } from '@/components/ui/overlay'
 import { cn } from '@/lib/cn'
 import { moneyParts, money } from '@/lib/format'
-import { useAction, useAgents, useApprovals, useBootstrap, useHealth, useProviders, useUsage } from '@/lib/queries'
+import { useAgents, useApprovals, useBootstrap, useHealth, useProviders, useUsage } from '@/lib/queries'
 import { call } from '@/lib/api'
+import { useDemoModeToggle } from '@/lib/demo-mode'
 import { CompanionListItem } from '@/orbit/CompanionListItem'
 import { OrbitLogo } from '@/orbit/Logo'
 import { HEALTH_META, ProviderHealthCard } from '@/orbit/ProviderHealthPopover'
@@ -14,6 +15,7 @@ import { ProviderMark } from '@/orbit/ProviderMark'
 import { navigate, useRouter } from '@/stores/router'
 import { useUi } from '@/stores/ui'
 import { useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 
 const NAV = [
   { path: '/', label: 'Vue d’ensemble', icon: LayoutGrid, key: '1' },
@@ -92,7 +94,11 @@ function ProviderRow({ provider, cost, selected, onSelect }: { provider: Provide
           refreshing={refreshing}
           onRefresh={async () => {
             setRefreshing(true)
-            await call('providers.refreshHealth').catch(() => undefined)
+            try {
+              await call('providers.refreshHealth')
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : String(err))
+            }
             await qc.invalidateQueries({ queryKey: ['health'] })
             setRefreshing(false)
           }}
@@ -168,7 +174,7 @@ function ProvidersSection() {
       <button onClick={() => navigate('/analytics')} className="w-full rounded-[11px] px-2.5 py-1 text-left hover:bg-white/[0.02]">
         <div className="flex items-center justify-between">
           <span className="flex items-center gap-1.5 text-[13px] text-fg-2">
-            Aujourd’hui <span className="size-[6px] rounded-full bg-success" />
+            Aujourd’hui {expanded && <span className={cn('size-[6px] rounded-full', HEALTH_META[worst].dot)} title="Statut des fournisseurs" />}
           </span>
           {expanded ? <BarChart3 className="size-3.5 text-fg-3" /> : <span className="flex items-baseline gap-0.5 tabular"><span className="text-[15px] font-semibold text-fg">{parts.value}</span><span className="text-[12px] text-fg-2">{parts.currency}</span></span>}
         </div>
@@ -203,7 +209,7 @@ function ProvidersSection() {
 
 function DemoPill() {
   const boot = useBootstrap()
-  const setMode = useAction('app.setMode', { success: 'Retour à vos données réelles' })
+  const demo = useDemoModeToggle()
   if (boot.data?.settings.mode !== 'demo') return null
   return (
     <div className="mx-3 mb-3 flex items-center gap-2 rounded-[10px] bg-accent/[0.08] py-1.5 pr-1.5 pl-2.5 text-xs text-accent ring-1 ring-accent/20" role="status">
@@ -212,7 +218,7 @@ function DemoPill() {
         Mode démo
         <span className="block text-2xs text-accent/70">Données fictives · hors ligne</span>
       </span>
-      <button onClick={() => setMode.mutate({ mode: 'real' })} className="rounded-[6px] px-2 py-1 text-2xs font-medium hover:bg-accent/15">
+      <button onClick={() => void demo.switchTo('real')} disabled={demo.isPending} className="rounded-[6px] px-2 py-1 text-2xs font-medium hover:bg-accent/15">
         Quitter
       </button>
     </div>

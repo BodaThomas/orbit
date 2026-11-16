@@ -48,7 +48,7 @@ export function RunStatusBanner({ detail, byId }: { detail: ConstellationRunDeta
             {progress.running > 0 && <span>{progress.running} en cours</span>}
             {progress.failed > 0 && <span className="text-danger">{progress.failed} en échec</span>}
             {progress.blocked > 0 && <span className="text-warning">{progress.blocked} bloquée{progress.blocked > 1 ? 's' : ''} par une dépendance</span>}
-            {progress.awaitingApproval > 0 && <span className="text-warning">{progress.awaitingApproval} validation{progress.awaitingApproval > 1 ? 's' : ''} en attente</span>}
+            {progress.awaitingApproval > 0 && <span className="text-warning">{progress.awaitingApproval} décision{progress.awaitingApproval > 1 ? 's' : ''} en attente</span>}
             {activeAgents.length > 0 && <span>au travail : {activeAgents.join(', ')}</span>}
             {run.activeMs > 0 && <span>temps de travail {duration(new Date(Date.now() - run.activeMs).toISOString())}</span>}
           </div>
@@ -61,7 +61,7 @@ export function RunStatusBanner({ detail, byId }: { detail: ConstellationRunDeta
           )}
           {actions.includes('retry') && (
             <Button size="sm" variant="secondary" onClick={() => setRetryOpen(true)}>
-              <RotateCcw /> Réessayer les tâches échouées
+              <RotateCcw /> Réessayer les sous-missions échouées
             </Button>
           )}
           {canSkip && (
@@ -311,7 +311,7 @@ function EditPlanDialog({ detail, byId, onClose }: { detail: ConstellationRunDet
               </div>
             )
           })}
-          <Button size="sm" variant="ghost" onClick={() => setRows([...rows, { id: `tache-${rows.length + 1}`, assignee: members[0]?.name ?? '', objective: '', expected: '', context: '', readOnly: true, dependsOn: '' }])}><Plus /> Ajouter une sous-mission</Button>
+          <Button size="sm" variant="ghost" onClick={() => setRows([...rows, { id: nextRowId(rows), assignee: members[0]?.name ?? '', objective: '', expected: '', context: '', readOnly: true, dependsOn: '' }])}><Plus /> Ajouter une sous-mission</Button>
         </div>
         <div className="flex justify-end gap-2 px-5 pt-3 pb-5">
           <Button variant="ghost" onClick={onClose}>Annuler</Button>
@@ -358,6 +358,13 @@ function LimitsDialog({ runId, limits, used, suggestSubtasks, onClose }: { runId
 
 const LEVEL_DOT = { info: 'bg-fg-3', success: 'bg-success', warning: 'bg-warning', error: 'bg-danger' } as const
 /** Distinguishes the end of an exchange, of a sub-mission and of the collective run. */
+/** First free `tache-N`: rows.length + 1 collides once a middle row has been deleted. */
+function nextRowId(rows: { id: string }[]): string {
+  let n = rows.length + 1
+  while (rows.some((r) => r.id === `tache-${n}`)) n++
+  return `tache-${n}`
+}
+
 const KIND_LABEL: Record<string, string> = {
   'exchange.ended': 'Fin d’échange',
   'task.done': 'Sous-mission terminée',

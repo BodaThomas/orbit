@@ -5,6 +5,7 @@ import { call } from '@/lib/api'
 import { clock, relative } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import { ProviderMark } from './ProviderMark'
+import { toast } from 'sonner'
 import { UptimeHistoryBars } from './UptimeHistoryBars'
 
 export const HEALTH_META: Record<HealthLevel, { label: string; icon: typeof CheckCircle2; text: string; dot: string }> = {
@@ -88,7 +89,7 @@ export function ProviderHealthCard({ provider, health, onRefresh, refreshing }: 
             </Button>
           )}
           {provider.statusPage && (
-            <Button size="xs" variant="ghost" onClick={() => void call('app.openStatusPage', { providerId: provider.id })}>
+            <Button size="xs" variant="ghost" onClick={() => call('app.openStatusPage', { providerId: provider.id }).catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))}>
               Source officielle <ExternalLink />
             </Button>
           )}

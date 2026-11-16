@@ -22,6 +22,7 @@ import { Tooltip } from '@/components/ui/overlay'
 import { useRemoteState } from '@/orbit/RemoteMission'
 import { useUi } from '@/stores/ui'
 import { RUN_STATUS_INFO } from '@shared/constellation-states'
+import { toast } from 'sonner'
 import { PendingPlanCard, RunEvents, RunStatusBanner } from '@/orbit/RunControls'
 
 function taskState(t: ConstellationTask): LinkState {
@@ -215,7 +216,18 @@ function Workspaces({ detail, byId }: { detail: ConstellationRunDetail; byId: Ma
               {w.conflictWith.length > 0 && <div className="mt-1.5 text-[12px] text-danger">Incompatible avec la proposition de {w.conflictWith.map((id) => byId.get(id)?.name).join(', ')} : fusionnez l’une, écartez ou corrigez l’autre.</div>}
               {['ready', 'conflict'].includes(w.status) && (
                 <div className="mt-2 flex gap-1.5">
-                  <Button size="xs" variant="ghost" onClick={async () => setDiff(diff?.id === w.id ? null : { id: w.id, text: await call('constellations.workspaceDiff', { id: w.id }) })}>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={async () => {
+                      if (diff?.id === w.id) return setDiff(null)
+                      try {
+                        setDiff({ id: w.id, text: await call('constellations.workspaceDiff', { id: w.id }) })
+                      } catch (err) {
+                        toast.error(err instanceof Error ? err.message : String(err))
+                      }
+                    }}
+                  >
                     <FileDiff /> {diff?.id === w.id ? 'Masquer le diff' : 'Voir le diff'}
                   </Button>
                   <Button
@@ -227,7 +239,14 @@ function Workspaces({ detail, byId }: { detail: ConstellationRunDetail; byId: Ma
                   >
                     <GitMerge /> Fusionner
                   </Button>
-                  <Button size="xs" variant="ghost" onClick={() => discard.mutate({ id: w.id })}>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    disabled={discard.isPending}
+                    onClick={async () => {
+                      if (await confirm({ title: `Écarter le travail de ${a?.name ?? 'ce compagnon'} ?`, body: `Le worktree et la branche ${w.branch} sont supprimés définitivement, avec toutes leurs modifications. Cette action est irréversible.`, confirm: 'Écarter définitivement', danger: true })) discard.mutate({ id: w.id })
+                    }}
+                  >
                     <Trash2 /> Écarter
                   </Button>
                 </div>

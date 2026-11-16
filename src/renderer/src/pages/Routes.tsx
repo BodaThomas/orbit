@@ -37,7 +37,7 @@ export function Routes() {
   if (path === '/automations') return <AutomationsPage focusRun={query.get('run')} />
   if (path === '/automations/new') return <AutomationWizardPage key="new" />
   if ((p = match('/automations/:id/edit', path))) return <AutomationWizardPage key={`edit-${p.id}`} automationId={p.id} />
-  if (path === '/activity') return <ActivityPage />
+  if (path === '/activity') return <ActivityPage key={query.get('q') ?? ''} initialQuery={query.get('q') ?? ''} />
   if (path === '/analytics') return <AnalyticsPage />
   if (path === '/machines') return <MachinesPage />
   if ((p = match('/settings/:section?', path))) return <SettingsPage section={p.section} />

@@ -13,6 +13,7 @@ import { OrbitLogo } from '@/orbit/Logo'
 import { Planet } from '@/orbit/Planet'
 import { navigate } from '@/stores/router'
 import { ProviderConnect } from './Settings'
+import { toast } from 'sonner'
 
 const TOTAL = 7
 
@@ -37,6 +38,8 @@ export function OnboardingPage() {
   const [agent, setAgent] = useState<Agent | null>(null)
   const [message, setMessage] = useState('')
   const [sentConversation, setSentConversation] = useState<string | null>(null)
+  const [draftConversation, setDraftConversation] = useState<string | null>(null)
+  const [sending, setSending] = useState(false)
   const providers = useProviders()
   const finish = useAction('settings.update')
   const demo = useAction('app.setMode')
@@ -71,10 +74,20 @@ export function OnboardingPage() {
 
   const sendFirst = async () => {
     if (!agent || !message.trim()) return next()
-    const conv = await call('conversations.create', { agentId: agent.id })
-    await call('conversations.send', { conversationId: conv.id, content: message.trim() }).catch(() => undefined)
-    setSentConversation(conv.id)
-    next()
+    if (sending) return
+    setSending(true)
+    try {
+      // Reuse the conversation of a failed attempt so a retry does not leave an empty one behind.
+      const convId = draftConversation ?? (await call('conversations.create', { agentId: agent.id })).id
+      setDraftConversation(convId)
+      await call('conversations.send', { conversationId: convId, content: message.trim() })
+      setSentConversation(convId)
+      next()
+    } catch (err) {
+      toast.error(`Le message n’a pas pu être envoyé : ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setSending(false)
+    }
   }
 
   const enter = async () => {
@@ -92,7 +105,7 @@ export function OnboardingPage() {
             <>
               <OrbitLogo size={72} className="mx-auto" />
               <h1 className="mt-8 text-[40px] leading-tight font-semibold tracking-[-0.03em] text-fg">Bienvenue dans Orbit</h1>
-              <p className="mt-3 text-[16px] text-fg-2">Your personal AI universe — un endroit calme où retrouver vos compagnons IA.</p>
+              <p className="mt-3 text-[16px] text-fg-2">Votre univers personnel d’IA — un endroit calme où retrouver vos compagnons IA.</p>
               <div className="mx-auto mt-8 flex max-w-xs gap-2">
                 <Input value={userName} onChange={(e) => setUserName(e.target.value)} placeholder="Votre prénom" className="h-10 text-[14px]" onKeyDown={(e) => e.key === 'Enter' && next()} autoFocus />
                 <Button size="lg" variant="primary" onClick={next}>
@@ -222,7 +235,7 @@ export function OnboardingPage() {
               <div className="mt-6 flex justify-center gap-3">
                 <Button size="lg" variant="ghost" onClick={next}>Passer</Button>
                 {connected && (
-                  <Button size="lg" variant="primary" onClick={() => void sendFirst()} disabled={!message.trim()}>
+                  <Button size="lg" variant="primary" onClick={() => void sendFirst()} disabled={!message.trim() || sending}>
                     Envoyer <ArrowRight />
                   </Button>
                 )}

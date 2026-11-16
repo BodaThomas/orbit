@@ -55,7 +55,11 @@ export function ClaudeCodeConnection({ provider }: { provider: ProviderInfo }) {
       })
       if (!ok) return
     }
-    qc.setQueryData(['usage', 'localClaude'], await call('usage.setLocalClaude', { enabled }))
+    try {
+      qc.setQueryData(['usage', 'localClaude'], await call('usage.setLocalClaude', { enabled }))
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    }
   }
   const lu = local.data?.usage
   const quota = quotas.data?.find((q) => q.providerId === 'claude-code')

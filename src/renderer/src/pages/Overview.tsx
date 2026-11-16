@@ -5,7 +5,7 @@ import { Page, PageHeader, Panel, PanelLink } from '@/components/shell/Page'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/field'
 import { Skeleton } from '@/components/ui/field'
-import { longDate, greeting, relative, money, moneyParts, integer } from '@/lib/format'
+import { longDate, greeting, relative, money, moneyParts, integer, pricedCost } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import { useCompanionStates } from '@/lib/companion-state'
 import { useActivity, useAgents, useApprovals, useBootstrap, useMissions, useProviders, useUsage } from '@/lib/queries'
@@ -79,7 +79,8 @@ export function OverviewPage() {
   const todo = pendingApprovals + failing.length
   const u = usage.data
   const today = u?.today
-  const todayCost = today ? today.official + today.estimated : 0
+  // null: only subscription or unpriced requests today - no dollar amount to show.
+  const todayCost = today ? pricedCost(today) : 0
   const yesterdayCost = u ? u.yesterday.official + u.yesterday.estimated : 0
   const spark = (u?.daily ?? []).slice(-14).map((d) => d.official + d.estimated)
 
@@ -164,11 +165,17 @@ export function OverviewPage() {
             </PulseCell>
             <PulseCell
               label="Aujourd’hui"
-              foot={u ? (yesterdayCost ? `Hier ${money(yesterdayCost)}` : 'Estimé · 14 derniers jours') : ' '}
+              foot={u ? [today && today.estimated > 0 && 'dont estimé', today?.subscriptionCount && `${today.subscriptionCount} req. incluses dans un abonnement`, yesterdayCost ? `Hier ${money(yesterdayCost)}` : 'Aucune dépense hier'].filter(Boolean).join(' · ') : ' '}
             >
               <span className="text-[22px] leading-7 font-semibold tracking-[-0.02em] text-fg tabular">
-                {moneyParts(todayCost).value}
-                <span className="text-[14px] font-normal text-fg-3"> $</span>
+                {todayCost == null ? (
+                  '—'
+                ) : (
+                  <>
+                    {moneyParts(todayCost).value}
+                    <span className="text-[14px] font-normal text-fg-3"> $</span>
+                  </>
+                )}
               </span>
               {spark.length > 1 && <Sparkline values={spark} />}
             </PulseCell>

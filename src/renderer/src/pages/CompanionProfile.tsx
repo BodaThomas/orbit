@@ -12,12 +12,13 @@ import { Button } from '@/components/ui/button'
 import { Badge, Switch, Tabs, Textarea } from '@/components/ui/field'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/overlay'
 import { cn } from '@/lib/cn'
-import { compactNumber, duration, integer, money, relative } from '@/lib/format'
+import { compactNumber, duration, integer, money, pricedCost, relative } from '@/lib/format'
 import { useAction, useActivity, useAgent, useAutomations, useConstellations, useConversations, useMemory, useMissions, useProviders, useRecentFiles, useRemoteMachines, useSecurity, useUsage } from '@/lib/queries'
 import { ActivityEventRow } from '@/orbit/ActivityEvent'
 import { AutoActionLog, AutoAllowedList, AutonomyModes, GrantList } from '@/orbit/PermissionPanels'
 import { CompanionAvatar, CompanionStatusIndicator } from '@/orbit/CompanionAvatar'
 import { CompanionContextItems } from '@/orbit/CompanionListItem'
+import { useConfirm } from '@/orbit/Confirm'
 import { OrbitEmptyState } from '@/orbit/EmptyState'
 import { MissionStatusIcon, MissionStatusLabel, PriorityGlyph } from '@/orbit/MissionStatus'
 import { ProviderMark } from '@/orbit/ProviderMark'
@@ -104,6 +105,7 @@ function Memory({ agent }: { agent: Agent }) {
   const create = useAction('memory.create', { onSuccess: () => setText('') })
   const update = useAction('memory.update')
   const remove = useAction('memory.delete')
+  const confirm = useConfirm()
   return (
     <div className="space-y-4">
       <div className="rounded-[12px] bg-white/[0.02] p-3 ring-1 ring-line">
@@ -115,7 +117,7 @@ function Memory({ agent }: { agent: Agent }) {
           <label className="flex items-center gap-2 text-xs text-fg-2">
             <Switch checked={share} onChange={setShare} label="Envoyer au fournisseur" /> Inclure dans le contexte envoyé au fournisseur
           </label>
-          <Button size="sm" variant="primary" className="ml-auto" disabled={!text.trim()} onClick={() => create.mutate({ agentId: agent.id, kind, content: text.trim(), includeInContext: share })}>
+          <Button size="sm" variant="primary" className="ml-auto" disabled={!text.trim() || create.isPending} onClick={() => create.mutate({ agentId: agent.id, kind, content: text.trim(), includeInContext: share })}>
             <Plus /> Ajouter
           </Button>
         </div>
@@ -136,7 +138,14 @@ function Memory({ agent }: { agent: Agent }) {
             </div>
             <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
               <Switch checked={m.includeInContext} onChange={(v) => update.mutate({ id: m.id, includeInContext: v })} label="Dans le contexte" />
-              <Button size="icon-sm" variant="ghost" aria-label="Supprimer" onClick={() => remove.mutate({ id: m.id })}>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Supprimer"
+                onClick={async () => {
+                  if (await confirm({ title: 'Supprimer ce souvenir ?', body: `${agent.name} ne s’en souviendra plus. Cette action est irréversible.`, confirm: 'Supprimer', danger: true })) remove.mutate({ id: m.id })
+                }}
+              >
                 <Trash2 />
               </Button>
             </div>
@@ -286,7 +295,7 @@ function Stats({ agent }: { agent: Agent }) {
   const done = missions.data?.filter((m) => m.status === 'done') ?? []
   const avg = done.length ? done.reduce((s, m) => s + (m.finishedAt && m.startedAt ? new Date(m.finishedAt).getTime() - new Date(m.startedAt).getTime() : 0), 0) / done.length : null
   const tiles: [string, string, string | undefined][] = [
-    ['Dépense du mois', row ? money(row.cost.official + row.cost.estimated) : money(0), row && row.cost.estimated > 0 ? 'dont estimé' : row?.cost.subscriptionCount ? `+ ${row.cost.subscriptionCount} req. incluses dans un abonnement` : undefined],
+    ['Dépense du mois', row ? money(pricedCost(row.cost)) : money(0), row && row.cost.estimated > 0 ? 'dont estimé' : row?.cost.subscriptionCount ? `+ ${row.cost.subscriptionCount} req. incluses dans un abonnement` : undefined],
     ['Requêtes ce mois', integer(row?.requests ?? 0), row ? `${compactNumber(row.tokens)} jetons` : undefined],
     ['Missions', `${mc.done} / ${mc.total}`, `${mc.failed} échec${mc.failed > 1 ? 's' : ''} · ${mc.cancelled} annulée${mc.cancelled > 1 ? 's' : ''}`],
     ['Taux de réussite', mc.successRate == null ? '—' : `${Math.round(mc.successRate * 100)} %`, 'hors missions annulées'],
@@ -381,7 +390,7 @@ export function CompanionProfilePage({ agentId, tab }: { agentId: string; tab?: 
   const strip: [string, React.ReactNode, React.ReactNode?][] = [
     ['Missions', <>{done}<span className="text-[13px] font-normal text-fg-3"> / {missions.data?.length ?? 0}</span></>, 'terminées'],
     ['Conversations', conversations.data?.length ?? 0],
-    ['Ce mois', money(month ? month.cost.official + month.cost.estimated : 0), month ? `${integer(month.requests)} requêtes` : 'aucune requête'],
+    ['Ce mois', month ? money(pricedCost(month.cost)) : money(0), month ? `${integer(month.requests)} requêtes${month.cost.estimated > 0 ? ' · dont estimé' : ''}` : 'aucune requête'],
     ['Mémoire', memory.data?.length ?? 0, `${memory.data?.filter((m) => m.includeInContext).length ?? 0} dans le contexte`],
   ]
 

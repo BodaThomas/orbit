@@ -3,7 +3,8 @@ import { Command } from 'cmdk'
 import { Activity, BarChart3, FlaskConical, Globe2, KeyRound, LayoutGrid, MessageCircle, Plus, Rocket, Search, Server, Settings, Users, Waypoints } from 'lucide-react'
 import { Kbd } from '@/components/ui/field'
 import { Dialog } from 'radix-ui'
-import { useAction, useAgents, useMissions, useBootstrap } from '@/lib/queries'
+import { useDemoModeToggle } from '@/lib/demo-mode'
+import { useAgents, useMissions, useBootstrap } from '@/lib/queries'
 import { Companion } from '@/orbit/Companion'
 import { MissionStatusIcon } from '@/orbit/MissionStatus'
 import { navigate } from '@/stores/router'
@@ -18,7 +19,7 @@ export function CommandPalette() {
   const agents = useAgents()
   const missions = useMissions()
   const boot = useBootstrap()
-  const setMode = useAction('app.setMode')
+  const demo = useDemoModeToggle()
   const [search, setSearch] = useState('')
   const run = (fn: () => void) => {
     setOpen(false)
@@ -43,7 +44,7 @@ export function CommandPalette() {
                 <Command.Item className={item} onSelect={() => run(() => useUi.getState().openNewMission(null))}><Rocket /> Nouvelle mission <span className="ml-auto"><Kbd>⌘N</Kbd></span></Command.Item>
                 <Command.Item className={item} onSelect={() => run(() => navigate('/companions/new'))}><Plus /> Nouveau compagnon <span className="ml-auto"><Kbd>⇧⌘N</Kbd></span></Command.Item>
                 <Command.Item className={item} onSelect={() => run(() => navigate('/settings/providers'))}><KeyRound /> Connecter un fournisseur</Command.Item>
-                <Command.Item className={item} onSelect={() => run(() => setMode.mutate({ mode: boot.data?.settings.mode === 'demo' ? 'real' : 'demo' }))}>
+                <Command.Item className={item} onSelect={() => run(() => void demo.switchTo(boot.data?.settings.mode === 'demo' ? 'real' : 'demo'))}>
                   <FlaskConical /> {boot.data?.settings.mode === 'demo' ? 'Quitter le mode démo' : 'Ouvrir le mode démo'}
                 </Command.Item>
               </Command.Group>
@@ -89,7 +90,10 @@ export function CommandPalette() {
               )}
               {search.length > 1 && (
                 <Command.Group heading="Activité" className={group}>
-                  <Command.Item value={`activite rechercher ${search}`} className={item} onSelect={() => run(() => navigate('/activity'))}><Activity /> Rechercher « {search} » dans l’activité</Command.Item>
+                  <Command.Item value={`activite rechercher ${search}`} className={item} onSelect={() => {
+                    const q = search.trim()
+                    run(() => navigate(`/activity?q=${encodeURIComponent(q)}`))
+                  }}><Activity /> Rechercher « {search} » dans l’activité</Command.Item>
                 </Command.Group>
               )}
             </Command.List>

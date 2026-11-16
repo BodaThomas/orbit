@@ -234,7 +234,7 @@ function Timeline({ mission, executions, events, toolCalls, agent }: { mission: 
 function FollowUp({ mission, agent }: { mission: Mission; agent: Agent }) {
   const [text, setText] = useState('')
   const send = useAction('missions.followUp', { success: 'Mission relancée dans la même session', onSuccess: () => setText('') })
-  const submit = () => text.trim() && send.mutate({ id: mission.id, prompt: text.trim() })
+  const submit = () => text.trim() && !send.isPending && send.mutate({ id: mission.id, prompt: text.trim() })
   return (
     <div className="rounded-[14px] bg-surface p-2 ring-1 ring-line focus-within:ring-accent/40">
       <textarea
@@ -374,12 +374,12 @@ export function MissionDetailPage({ missionId, focusApproval }: { missionId: str
             </Button>
           )}
           {(mission.status === 'todo' || mission.status === 'scheduled') && (
-            <Button variant="primary" onClick={() => start.mutate({ id: mission.id })}>
+            <Button variant="primary" disabled={start.isPending} onClick={() => start.mutate({ id: mission.id })}>
               <Play /> Lancer
             </Button>
           )}
           {(mission.status === 'failed' || mission.status === 'cancelled' || mission.status === 'done') && !mission.engine && (
-            <Button variant="secondary" onClick={() => retry.mutate({ id: mission.id })}>
+            <Button variant="secondary" disabled={retry.isPending} onClick={() => retry.mutate({ id: mission.id })}>
               <RotateCcw /> Relancer
             </Button>
           )}

@@ -26,6 +26,7 @@ interface UiState {
 }
 
 let signalSeq = 0
+const LIVE_EVENTS_PER_MISSION = 500
 
 export const useUi = create<UiState>((set) => ({
   paletteOpen: false,
@@ -43,7 +44,8 @@ export const useUi = create<UiState>((set) => ({
   liveMissionEvents: {},
   pushMissionEvent: (e) =>
     set((s) => ({
-      liveMissionEvents: { ...s.liveMissionEvents, [e.missionId]: [...(s.liveMissionEvents[e.missionId] ?? []), e] },
+      // Capped: MissionDetail merges these with the persisted events by id, so older ones are not lost.
+      liveMissionEvents: { ...s.liveMissionEvents, [e.missionId]: [...(s.liveMissionEvents[e.missionId] ?? []).slice(-(LIVE_EVENTS_PER_MISSION - 1)), e] },
       // A persisted assistant message or a new step replaces the streamed draft.
       missionDrafts: e.type === 'message' || e.type === 'tool' || e.type === 'completed' || e.type === 'failed' || e.type === 'cancelled' ? { ...s.missionDrafts, [e.missionId]: '' } : s.missionDrafts,
     })),

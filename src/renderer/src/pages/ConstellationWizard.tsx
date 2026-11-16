@@ -11,6 +11,7 @@ import { cn } from '@/lib/cn'
 import { useAction, useAgents, useConstellations } from '@/lib/queries'
 import { CompanionAvatar } from '@/orbit/CompanionAvatar'
 import { ConstellationMap } from '@/orbit/ConstellationMap'
+import { toast } from 'sonner'
 import { navigate } from '@/stores/router'
 
 const STEPS = [
@@ -235,7 +236,14 @@ export function ConstellationWizardPage({ constellationId }: { constellationId?:
                 <Label hint="Choisi par vous : tous les membres y travaillent">Dossier de travail</Label>
                 <div className="flex gap-2">
                   <Input readOnly value={d.workspace ?? ''} placeholder="Dossier de chaque compagnon" className="text-fg-2" />
-                  <Button variant="secondary" onClick={async () => { const dir = await call('app.chooseDirectory'); if (dir) set('workspace', dir) }}>
+                  <Button variant="secondary" onClick={async () => {
+                    try {
+                      const dir = await call('app.chooseDirectory')
+                      if (dir) set('workspace', dir)
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : String(err))
+                    }
+                  }}>
                     <FolderOpen /> Choisir
                   </Button>
                   {d.workspace && <Button variant="ghost" onClick={() => set('workspace', null)}>Retirer</Button>}

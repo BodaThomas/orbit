@@ -236,8 +236,8 @@ function PendingConfirmations({ focus }: { focus?: string | null }) {
               <div className="text-[13px] text-fg">« {a?.name} » n’a pas pu s’exécuter</div>
               <div className="truncate text-[12px] text-fg-3">{r.note}</div>
             </div>
-            <Button size="sm" variant="ghost" onClick={() => confirmRun.mutate({ id: r.id, approve: false })}>Ignorer</Button>
-            <Button size="sm" variant="primary" onClick={() => confirmRun.mutate({ id: r.id, approve: true })}>
+            <Button size="sm" variant="ghost" disabled={confirmRun.isPending} onClick={() => confirmRun.mutate({ id: r.id, approve: false })}>Ignorer</Button>
+            <Button size="sm" variant="primary" disabled={confirmRun.isPending} onClick={() => confirmRun.mutate({ id: r.id, approve: true })}>
               <Play /> Lancer maintenant
             </Button>
           </div>
@@ -304,7 +304,11 @@ export function AutomationsPage({ focusRun }: { focusRun?: string | null }) {
                   checked={Boolean(login.data?.enabled)}
                   disabled={!login.data?.supported}
                   onChange={async (v) => {
-                    await call('app.launchAtLogin', { enabled: v })
+                    try {
+                      await call('app.launchAtLogin', { enabled: v })
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : String(err))
+                    }
                     void login.refetch()
                   }}
                   label="Ouvrir Orbit à l’ouverture de session"
@@ -440,8 +444,13 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
       const owner = saved.ownerState === 'transferring' ? saved.pendingOwner : saved.schedulerOwner
       if (owner !== location) {
         // Created or kept on this Mac first, then moved: never two schedulers at once.
-        const moved = await call('automations.transfer', { id: saved.id, to: location })
-        toast.success(`« ${moved.name} » est planifiée ${location === 'local' ? 'sur ce Mac' : `sur ${locationMachine?.name ?? 'le serveur'}`}`)
+        // The automation already exists here, so a failed transfer must not be retried as a new create.
+        try {
+          const moved = await call('automations.transfer', { id: saved.id, to: location })
+          toast.success(`« ${moved.name} » est planifiée ${location === 'local' ? 'sur ce Mac' : `sur ${locationMachine?.name ?? 'le serveur'}`}`)
+        } catch (err) {
+          toast.error(`« ${saved.name} » est enregistrée sur ce Mac, mais le transfert a échoué : ${err instanceof Error ? err.message : String(err)}`)
+        }
       } else toast.success(automationId ? 'Automatisation mise à jour' : `« ${saved.name} » est planifiée`)
       navigate('/automations')
     } catch (err) {
@@ -450,7 +459,21 @@ export function AutomationWizardPage({ automationId }: { automationId?: string }
       setSaving(false)
     }
   }
-  if (!loaded) return null
+  if (!loaded) {
+    if (automationId && automations.data && !existing)
+      return (
+        <Page>
+          <div className="card">
+            <OrbitEmptyState
+              title="Automatisation introuvable"
+              body="Elle a peut-être été supprimée."
+              action={<Button onClick={() => navigate('/automations')}><ArrowLeft /> Automatisations</Button>}
+            />
+          </div>
+        </Page>
+      )
+    return null
+  }
 
   const section = (n: number, label: string, children: React.ReactNode) => (
     <section className="rounded-2xl bg-surface p-5 ring-1 ring-line">

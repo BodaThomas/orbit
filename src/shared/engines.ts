@@ -14,7 +14,7 @@ export const ENGINE_INFO: Record<ProviderId, { label: string; kind: 'agent' | 'c
   grok: { label: 'Grok', kind: 'chat', connection: 'Bientôt', billing: '—' },
   openrouter: { label: 'OpenRouter', kind: 'chat', connection: 'Bientôt', billing: '—' },
   ollama: { label: 'Ollama', kind: 'chat', connection: 'Bientôt', billing: '—' },
-  demo: { label: 'Démo', kind: 'demo', connection: 'Hors ligne · réponses fictives', billing: 'Aucun' },
+  demo: { label: 'Démo locale', kind: 'demo', connection: 'Hors ligne · réponses fictives', billing: 'Aucun' },
 }
 
 export const AGENT_ENGINES: ProviderId[] = ['claude-code', 'claude-agent', 'codex']

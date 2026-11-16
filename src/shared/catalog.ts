@@ -123,7 +123,7 @@ export const TEXTURES: { id: PlanetTexture; label: string }[] = [
 export const STATUS_LABELS: Record<AgentStatus, string> = {
   available: 'Disponible',
   working: 'En mission',
-  awaiting_approval: 'En attente d’approbation',
+  awaiting_approval: 'Approbation nécessaire',
   done: 'Mission terminée',
   error: 'Erreur',
   offline: 'Hors ligne',

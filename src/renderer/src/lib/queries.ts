@@ -1,4 +1,4 @@
-import { QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { toast } from 'sonner'
 import type { InvalidateScope, IpcChannel, IpcInput, IpcOutputs, OrbitEvent } from '@shared/ipc'
@@ -24,12 +24,12 @@ const SCOPE_KEYS: Record<Exclude<InvalidateScope, 'all'>, string[]> = {
   usage: ['usage'],
   notifications: ['notifications'],
   memory: ['memory'],
-  settings: ['bootstrap', 'security'],
+  settings: ['bootstrap', 'security', 'audit'],
   workflows: ['workflows'],
   constellations: ['constellations', 'constellation-run', 'missions'],
   automations: ['automations'],
   machines: ['machines', 'runtime'],
-  security: ['security', 'grants', 'auto-log'],
+  security: ['security', 'grants', 'auto-log', 'audit'],
 }
 
 /** Wires main-process push events into the query cache and the UI store. */
@@ -104,11 +104,13 @@ function notifyAuto(evt: Extract<OrbitEvent, { type: 'permission.auto' }>) {
   })
 }
 
-const useOrbitQuery = <C extends IpcChannel>(key: unknown[], channel: C, input?: IpcInput<C>, enabled = true) =>
+const useOrbitQuery = <C extends IpcChannel>(key: unknown[], channel: C, input?: IpcInput<C>, enabled = true, keepPrevious = false) =>
   useQuery({
     queryKey: key,
     queryFn: () => (call as (c: C, i?: IpcInput<C>) => Promise<IpcOutputs[C]>)(channel, input),
     enabled,
+    // Filtered lists keep showing the previous results while the next filter loads.
+    placeholderData: keepPrevious ? keepPreviousData : undefined,
   })
 
 export const useBootstrap = () => useOrbitQuery(['bootstrap'], 'app.bootstrap')
@@ -126,7 +128,7 @@ export const useMissions = (agentId?: string) => useOrbitQuery(['missions', agen
 export const useMission = (id: string | undefined) => useOrbitQuery(['mission', id], 'missions.get', { id: id ?? '' }, Boolean(id))
 export const useApprovals = () => useOrbitQuery(['approvals', 'pending'], 'approvals.list', { status: 'pending' })
 export const useActivity = (opts: { agentId?: string; query?: string; level?: ActivityLevel; limit?: number } = {}) =>
-  useOrbitQuery(['activity', opts], 'activity.list', opts)
+  useOrbitQuery(['activity', opts], 'activity.list', opts, true, true)
 export const useUsage = () => useOrbitQuery(['usage'], 'usage.summary')
 export const useLocalClaude = () => useOrbitQuery(['usage', 'localClaude'], 'usage.localClaude')
 export const useQuotas = () => useOrbitQuery(['usage', 'quotas'], 'usage.quotas')

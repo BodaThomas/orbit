@@ -15,6 +15,7 @@ import { Companion } from '@/orbit/Companion'
 import { CompanionAvatar } from '@/orbit/CompanionAvatar'
 import { Planet } from '@/orbit/Planet'
 import { ProviderMark } from '@/orbit/ProviderMark'
+import { toast } from 'sonner'
 import { navigate } from '@/stores/router'
 
 const STEPS = [
@@ -479,8 +480,12 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
                       variant="secondary"
                       disabled={draft.runtime === 'remote'}
                       onClick={async () => {
-                        const dir = await call('app.chooseDirectory')
-                        if (dir) set('workingDirectory', dir)
+                        try {
+                          const dir = await call('app.chooseDirectory')
+                          if (dir) set('workingDirectory', dir)
+                        } catch (err) {
+                          toast.error(err instanceof Error ? err.message : String(err))
+                        }
                       }}
                     >
                       <FolderOpen /> Choisir

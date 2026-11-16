@@ -41,10 +41,8 @@ export function CompanionContextItems({ agent, Item = ContextMenuItem, Separator
             confirm: 'Supprimer',
             danger: true,
           })
-          if (ok) {
-            remove.mutate({ id: agent.id })
-            navigate('/')
-          }
+          // Leave the companion's pages only once it is really gone; failures are toasted by useAction.
+          if (ok) remove.mutate({ id: agent.id }, { onSuccess: () => navigate('/') })
         }}
       >
         <Trash2 /> Supprimer…

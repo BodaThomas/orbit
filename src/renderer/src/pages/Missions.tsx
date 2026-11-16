@@ -17,7 +17,7 @@ import { useUi } from '@/stores/ui'
 const COLUMNS: { title: string; statuses: MissionStatus[] }[] = [
   { title: 'À faire', statuses: ['todo', 'scheduled'] },
   { title: 'En cours', statuses: ['running', 'waiting'] },
-  { title: 'À valider', statuses: ['approval_required'] },
+  { title: 'À approuver', statuses: ['approval_required'] },
   { title: 'Terminées', statuses: ['done'] },
   { title: 'Échecs & annulées', statuses: ['failed', 'cancelled'] },
 ]
@@ -93,6 +93,15 @@ export function MissionsPage() {
       </div>
 
       {missions.isLoading && <Skeleton className="h-64 rounded-xl" />}
+      {missions.isError && !missions.data && (
+        <div className="rounded-xl bg-surface ring-1 ring-line">
+          <OrbitEmptyState
+            title="Impossible de charger les missions"
+            body={missions.error instanceof Error ? missions.error.message : 'Une erreur est survenue.'}
+            action={<Button onClick={() => void missions.refetch()}>Réessayer</Button>}
+          />
+        </div>
+      )}
       {missions.data && list.length === 0 && (
         <div className="rounded-xl bg-surface ring-1 ring-line">
           <OrbitEmptyState title={missions.data.length ? 'Aucune mission ne correspond' : 'Aucune mission'} body={missions.data.length ? 'Modifiez vos filtres.' : 'Créez une mission pour mettre un compagnon au travail.'} />
@@ -101,26 +110,26 @@ export function MissionsPage() {
 
       {list.length > 0 && view === 'list' && (
         <div className="overflow-hidden rounded-xl bg-surface ring-1 ring-line">
-          <div className="grid grid-cols-[64px_minmax(0,1fr)_150px_44px_190px_90px_96px] items-center gap-3 border-b border-line px-4 py-2 text-2xs font-medium text-fg-3">
+          <div className="grid grid-cols-[64px_minmax(0,1fr)_150px_44px_190px_120px_96px] items-center gap-3 border-b border-line px-4 py-2 text-2xs font-medium text-fg-3">
             <span>ID</span><span>Mission</span><span>Compagnon</span><span>Prio.</span><span>Statut</span><span className="text-right">Coût</span><span className="text-right">Mis à jour</span>
           </div>
           {list.map((m) => {
             const a = byId.get(m.agentId)
             return (
-              <button key={m.id} onClick={() => navigate(`/missions/${m.id}`)} className="grid w-full grid-cols-[64px_minmax(0,1fr)_150px_44px_190px_90px_96px] items-center gap-3 border-b border-line/60 px-4 py-2.5 text-left last:border-0 hover:bg-white/[0.02]">
+              <button key={m.id} onClick={() => navigate(`/missions/${m.id}`)} className="grid w-full grid-cols-[64px_minmax(0,1fr)_150px_44px_190px_120px_96px] items-center gap-3 border-b border-line/60 px-4 py-2.5 text-left last:border-0 hover:bg-white/[0.02]">
                 <span className="font-mono text-2xs text-fg-3">{m.shortId}</span>
                 <span className="truncate text-[13.5px] text-fg">{m.title}</span>
                 <span className="flex items-center gap-2 truncate text-[13px] text-fg-2">{a && <Companion appearance={a.appearance} size={18} />}{a?.name}</span>
                 <PriorityGlyph priority={m.priority} />
                 <MissionStatusLabel status={m.status} />
-                <span className={cn('text-right text-xs tabular', m.costUsd == null ? 'text-fg-4' : 'text-fg-2')} title={m.costKind === 'estimated' ? 'Estimé' : undefined}>
-                  {m.costUsd == null ? '—' : `${money(m.costUsd, true)}${m.costKind === 'estimated' ? '*' : ''}`}
+                <span className={cn('text-right text-xs tabular', m.costUsd == null ? 'text-fg-4' : 'text-fg-2')} title={m.costKind === 'estimated' ? 'Coût estimé : jetons officiels × tarifs publics datés' : undefined}>
+                  {m.costUsd == null ? '—' : money(m.costUsd, true)}
+                  {m.costUsd != null && m.costKind === 'estimated' && <span className="ml-1 text-2xs text-fg-4">estimé</span>}
                 </span>
                 <span className="text-right text-xs text-fg-3 tabular">{relative(m.updatedAt)}</span>
               </button>
             )
           })}
-          <div className="px-4 py-2 text-2xs text-fg-4">* coût estimé : jetons officiels × tarifs publics datés</div>
         </div>
       )}
 

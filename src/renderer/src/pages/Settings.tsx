@@ -8,12 +8,13 @@ import { cn } from '@/lib/cn'
 import { dateTime, relative } from '@/lib/format'
 import { useQueryClient } from '@tanstack/react-query'
 import { call } from '@/lib/api'
+import { useDemoModeToggle } from '@/lib/demo-mode'
 import { useAction, useAudit, useBootstrap, useNotifications, useProviders, useSecurity } from '@/lib/queries'
 import { AutoActionLog, GrantList } from '@/orbit/PermissionPanels'
-import { useConfirm } from '@/orbit/Confirm'
 import { ProviderMark } from '@/orbit/ProviderMark'
 import { ClaudeCodeConnection } from '@/orbit/ClaudeCodeConnection'
 import { navigate } from '@/stores/router'
+import { toast } from 'sonner'
 
 const SECTIONS = [
   { key: 'general', label: 'Général', icon: SlidersHorizontal },
@@ -125,6 +126,61 @@ export function ProviderConnect({ provider, compact }: { provider: ProviderInfo;
   )
 }
 
+const SECURITY_LAYERS: Record<string, string> = { policy: 'Politique', engine: 'Moteur', isolation: 'Isolation', approval: 'Vous', grant: 'Autorisation' }
+
+function securityDecision(action: string, decision: string): { label: string; tone: 'success' | 'danger' | 'warning' | 'neutral' } {
+  // Revocations are stored as `deny` but nothing was blocked: the user withdrew a grant.
+  if (action === 'grant.revoke') return { label: 'révoquée', tone: 'neutral' }
+  switch (decision) {
+    case 'deny':
+      return { label: 'bloqué', tone: 'danger' }
+    case 'denied':
+      return { label: 'refusé', tone: 'danger' }
+    case 'ask':
+      return { label: 'demandé', tone: 'warning' }
+    case 'approved':
+      return { label: 'approuvé', tone: 'success' }
+    case 'allow':
+      return { label: 'autorisé', tone: 'success' }
+    case 'auto':
+      return { label: 'sans confirmation', tone: 'success' }
+    default:
+      return { label: decision, tone: 'neutral' }
+  }
+}
+
+const AUDIT_ACTORS: Record<string, string> = { user: 'Vous', agent: 'Compagnon', system: 'Orbit' }
+const AUDIT_ACTIONS: Record<string, string> = {
+  'agent.delete': 'Compagnon supprimé',
+  'agent.update': 'Compagnon modifié',
+  'app.launchAtLogin': 'Ouverture à la connexion',
+  'approval.approve': 'Approbation accordée',
+  'approval.deny': 'Approbation refusée',
+  'automation.create': 'Automatisation créée',
+  'automation.pause': 'Automatisation en pause',
+  'automation.resume': 'Automatisation reprise',
+  'automation.transfer': 'Automatisation transférée',
+  claudeLocalLogs: 'Journaux locaux de Claude',
+  'constellation.create': 'Constellation créée',
+  'constellation.limits': 'Limites de constellation',
+  'constellation.plan.approve': 'Plan approuvé',
+  'engine.test': 'Test du moteur',
+  'grant.always': 'Autorisation permanente',
+  'grant.mission': 'Autorisation pour la mission',
+  'grant.revoke': 'Autorisation révoquée',
+  'machine.deploy': 'Runtime installé',
+  'machine.pair': 'Machine appairée',
+  'machine.pinHostKey': 'Clé d’hôte épinglée',
+  'machine.pinRuntimeIdentity': 'Identité du runtime confirmée',
+  'machine.register': 'Machine ajoutée',
+  'machine.revoke': 'Machine révoquée',
+  'provider.removeKey': 'Clé API retirée',
+  'provider.setKey': 'Clé API enregistrée',
+  'tool.denied': 'Outil refusé',
+  'workspace.merge': 'Proposition fusionnée',
+}
+const auditAction = (action: string) => AUDIT_ACTIONS[action] ?? action
+
 function SecurityLevels() {
   const security = useSecurity()
   const qc = useQueryClient()
@@ -134,6 +190,8 @@ function SecurityLevels() {
     setTesting(true)
     try {
       qc.setQueryData(['security'], await call('security.selfTest'))
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
     } finally {
       setTesting(false)
     }
@@ -184,9 +242,12 @@ function SecurityLevels() {
         {security.data?.events.slice(0, 40).map((e) => (
           <div key={e.id} className="grid grid-cols-[110px_90px_1fr_auto] items-center gap-3 px-4 py-2 text-[12.5px]">
             <span className="text-fg-3 tabular">{dateTime(e.createdAt)}</span>
-            <span className="text-fg-3">{({ policy: 'Politique', engine: 'Moteur', isolation: 'Isolation', approval: 'Vous' } as Record<string, string>)[e.layer] ?? e.layer}</span>
+            <span className="text-fg-3">{SECURITY_LAYERS[e.layer] ?? e.layer}</span>
             <span className="truncate text-[12px] text-fg-2" title={e.reason ?? undefined}>{e.target ?? e.action}{e.reason ? ` — ${e.reason}` : ''}</span>
-            <Badge tone={e.decision === 'deny' || e.decision === 'denied' ? 'danger' : e.decision === 'ask' ? 'warning' : 'success'}>{e.decision === 'deny' ? 'bloqué' : e.decision === 'denied' ? 'refusé' : e.decision === 'approved' ? 'approuvé' : e.decision}</Badge>
+            {(() => {
+              const d = securityDecision(e.action, e.decision)
+              return <Badge tone={d.tone}>{d.label}</Badge>
+            })()}
           </div>
         ))}
         {security.data?.events.length === 0 && <div className="px-4 py-6 text-center text-[13px] text-fg-3">Aucune décision enregistrée.</div>}
@@ -203,8 +264,7 @@ export function SettingsPage({ section }: { section?: string }) {
   const audit = useAudit()
   const update = useAction('settings.update', { success: 'Enregistré' })
   const markRead = useAction('notifications.markRead')
-  const setMode = useAction('app.setMode', { onSuccess: () => navigate('/') })
-  const confirm = useConfirm()
+  const demo = useDemoModeToggle()
   const s = boot.data?.settings
   const [daily, setDaily] = useState<string>(s?.dailyLimitUsd?.toString() ?? '')
   const [monthly, setMonthly] = useState<string>(s?.monthlyBudgetUsd?.toString() ?? '')
@@ -321,8 +381,8 @@ export function SettingsPage({ section }: { section?: string }) {
                 {audit.data?.slice(0, 80).map((e) => (
                   <div key={e.id} className="grid grid-cols-[110px_80px_1fr_auto] items-center gap-3 px-4 py-2 text-[12.5px]">
                     <span className="text-fg-3 tabular">{dateTime(e.createdAt)}</span>
-                    <span className="text-fg-3">{e.actor}</span>
-                    <span className="truncate font-mono text-[11.5px] text-fg-2">{e.action}{e.target ? ` · ${e.target}` : ''}{e.reason ? ` — ${e.reason}` : ''}</span>
+                    <span className="text-fg-3">{AUDIT_ACTORS[e.actor] ?? e.actor}</span>
+                    <span className="truncate text-[12px] text-fg-2" title={e.action}>{auditAction(e.action)}{e.target ? ` · ${e.target}` : ''}{e.reason ? ` — ${e.reason}` : ''}</span>
                     <Badge tone={e.allowed ? 'success' : 'danger'}>{e.allowed ? 'autorisé' : 'refusé'}</Badge>
                   </div>
                 ))}
@@ -336,10 +396,8 @@ export function SettingsPage({ section }: { section?: string }) {
               <Row title="Mode démo" body={s.mode === 'demo' ? 'Vous explorez des données fictives dans une base séparée.' : 'Explorez Orbit avec des compagnons fictifs, sans clé ni réseau. Vos données réelles ne sont pas touchées.'}>
                 <Button
                   variant={s.mode === 'demo' ? 'secondary' : 'outline'}
-                  onClick={async () => {
-                    if (s.mode === 'demo' || (await confirm({ title: 'Passer en mode démo ?', body: 'Orbit ouvrira une base de démonstration séparée. Vous pourrez revenir à vos données à tout moment.', confirm: 'Ouvrir la démo' })))
-                      setMode.mutate({ mode: s.mode === 'demo' ? 'real' : 'demo' })
-                  }}
+                  disabled={demo.isPending}
+                  onClick={() => void demo.switchTo(s.mode === 'demo' ? 'real' : 'demo')}
                 >
                   <FlaskConical /> {s.mode === 'demo' ? 'Revenir à mes données' : 'Ouvrir la démo'}
                 </Button>
@@ -347,7 +405,7 @@ export function SettingsPage({ section }: { section?: string }) {
               <Row title="Emplacement des données" body="SQLite local. Rien n’est envoyé ailleurs que vers les fournisseurs que vous connectez.">
                 <span className="selectable max-w-80 truncate font-mono text-xs text-fg-3">{boot.data?.dataPath}</span>
               </Row>
-              <Row title="Revoir l’accueil" body="Relance l’onboarding au prochain affichage.">
+              <Row title="Revoir l’accueil" body="Relance immédiatement l’écran d’accueil. Vos compagnons et vos données sont conservés.">
                 <Button variant="ghost" onClick={() => update.mutate({ onboarded: false })}>Relancer</Button>
               </Row>
             </Card>
@@ -355,7 +413,7 @@ export function SettingsPage({ section }: { section?: string }) {
 
           {current === 'about' && (
             <Card>
-              <Row title="Orbit" body="Your personal AI universe."><span className="text-xs text-fg-3 tabular">v{boot.data?.appVersion}</span></Row>
+              <Row title="Orbit" body="Votre univers personnel d’IA."><span className="text-xs text-fg-3 tabular">v{boot.data?.appVersion}</span></Row>
               <Row title="Plateforme"><span className="text-xs text-fg-3">{boot.data?.platform}</span></Row>
             </Card>
           )}

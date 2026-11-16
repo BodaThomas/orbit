@@ -1,8 +1,19 @@
+import type { CostBreakdown } from '@shared/types'
 const usd = new Intl.NumberFormat('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const usdPrecise = new Intl.NumberFormat('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })
 const int = new Intl.NumberFormat('fr-FR')
 const compact = new Intl.NumberFormat('fr-FR', { notation: 'compact', maximumFractionDigits: 1 })
 const rtf = new Intl.RelativeTimeFormat('fr', { numeric: 'auto', style: 'short' })
+
+/**
+ * Known API spend, or null when every request was covered by a subscription or had no
+ * known price: those have no dollar amount and are shown « — », never 0,00 $.
+ */
+export function pricedCost(c: CostBreakdown | null | undefined): number | null {
+  if (!c) return null
+  const priced = c.official + c.estimated
+  return priced === 0 && (c.subscriptionCount > 0 || c.unknownCount > 0) ? null : priced
+}
 
 export function money(n: number | null | undefined, precise = false): string {
   if (n == null) return '—'
