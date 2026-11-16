@@ -49,6 +49,13 @@ export interface ExistingTask {
   key: string
   agentId: string
   status: string
+  /** Content of the task (when known): a finished key can only be re-sent unchanged. */
+  spec?: Pick<SubtaskSpec, 'objective' | 'expected' | 'context' | 'dependsOn' | 'readOnly'>
+}
+
+/** Same work: same companion, objective, expectation, context, dependencies and read-only flag. */
+export function sameWork(a: { agentId: string; objective: string; expected: string; context: string; dependsOn: string[]; readOnly: boolean }, b: typeof a): boolean {
+  return a.agentId === b.agentId && a.objective.trim() === b.objective.trim() && a.expected.trim() === b.expected.trim() && a.context.trim() === b.context.trim() && a.readOnly === b.readOnly && [...a.dependsOn].sort().join('\n') === [...b.dependsOn].sort().join('\n')
 }
 
 /** Last fenced ```orbit-plan block (or <orbit-plan>…</orbit-plan>) of a message. */
@@ -140,6 +147,12 @@ export function validatePlan(
     }
     if (!agent.enabled) {
       errors.push(`${t.id} : ${agent.name} est désactivé.`)
+      continue
+    }
+    // A finished task is never re-run: reusing its id for different work would silently drop it.
+    const prev = existing.find((e) => e.key === t.id)
+    if (prev?.status === 'done' && prev.spec && !sameWork({ agentId: prev.agentId, ...prev.spec }, { ...t, agentId: agent.id })) {
+      errors.push(`${t.id} : cet identifiant désigne une sous-mission déjà terminée ; donne un nouvel identifiant à ce nouveau travail.`)
       continue
     }
     tasks.push({ ...t, agentId: agent.id })
@@ -261,7 +274,12 @@ export function handoffPrompt(o: {
   return { prompt, redactions }
 }
 
-export function synthesisPrompt(o: { results: { key: string; agentName: string; status: string; text: string }[]; round: number; canDelegateAgain: boolean; remaining: number }): { prompt: string; redactions: number } {
+/** Ids already taken in the run: a new piece of work needs a new id. */
+function usedIdsLine(ids: string[] | undefined): string {
+  return ids?.length ? `Identifiants déjà utilisés dans cette exécution : ${ids.join(', ')}. Une sous-mission terminée n’est jamais relancée : pour un nouveau travail, choisis un nouvel identifiant.` : ''
+}
+
+export function synthesisPrompt(o: { results: { key: string; agentName: string; status: string; text: string }[]; round: number; canDelegateAgain: boolean; remaining: number; usedIds?: string[] }): { prompt: string; redactions: number } {
   let redactions = 0
   const body = o.results
     .map((r) => {
@@ -277,7 +295,10 @@ export function synthesisPrompt(o: { results: { key: string; agentName: string; 
       o.canDelegateAgain
         ? `Fais la synthèse pour l’utilisateur. Si un complément est indispensable, tu peux déléguer encore (au plus ${o.remaining} sous-missions) avec un nouveau bloc \`orbit-plan\` ; sinon termine par \`\`\`orbit-plan\n{"tasks":[]}\n\`\`\`.\n\n${PLAN_CONTROL}`
         : `Rédige maintenant la synthèse finale pour l’utilisateur (aucune nouvelle délégation possible) : ce qui a été fait, par qui, les résultats, les points à vérifier et les prochaines étapes.`,
-    ].join('\n\n'),
+      o.canDelegateAgain ? usedIdsLine(o.usedIds) : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n'),
     redactions,
   }
 }
@@ -289,7 +310,7 @@ export const PLAN_CONTROL = [
 ].join('\n')
 
 /** A user's structured answer or instruction, handed back to the coordinator. */
-export function continuationPrompt(o: { kind: 'answer' | 'rejected' | 'continue' | 'resume'; text: string; questions?: string[]; remaining: number; round: number }): string {
+export function continuationPrompt(o: { kind: 'answer' | 'rejected' | 'continue' | 'resume'; text: string; questions?: string[]; remaining: number; round: number; usedIds?: string[] }): string {
   const head = {
     answer: `# Réponse de l’utilisateur à tes questions`,
     rejected: `# L’utilisateur n’a pas validé ton plan`,
@@ -301,6 +322,7 @@ export function continuationPrompt(o: { kind: 'answer' | 'rejected' | 'continue'
     o.questions?.length ? `Tes questions :\n${o.questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}` : '',
     o.text ? `Réponse / consigne :\n${o.text}` : '',
     `Poursuis la coordination (tour ${o.round}). Il reste au plus ${o.remaining} sous-missions possibles. Termine par ton bloc \`orbit-plan\`.`,
+    usedIdsLine(o.usedIds),
     PLAN_CONTROL,
   ]
     .filter(Boolean)

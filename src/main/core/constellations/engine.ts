@@ -43,7 +43,7 @@ import type { Journal } from '../journal'
 import { intersectPermissions, type MissionManager, type MissionSettled } from '../missions'
 import type { ProviderRegistry } from '../providers'
 import { newId, nowIso, OrbitError } from '../util'
-import { continuationPrompt, diffPlans, handoffPrompt, parseResult, planHash, planningPrompt, stripProtocol, synthesisPrompt, validatePlan, type PlanValidation } from './protocol'
+import { continuationPrompt, diffPlans, handoffPrompt, parseResult, planHash, planningPrompt, sameWork, stripProtocol, synthesisPrompt, validatePlan, type PlanValidation } from './protocol'
 import { addWorktree, branchDiff, commitAll, conflictsBetween, diffStat, headRef, mergeBranch, removeWorktree, repoRoot } from './worktrees'
 
 /** Orbit Desktop: runs whose companions all live on one runtime are coordinated there. */
@@ -385,8 +385,9 @@ export class ConstellationEngine {
 
   /** Failed or interrupted tasks, with what they already did (checked before any retry). */
   private retryable(runId: string, tasks = this.tasks(runId)) {
+    const inPlan = this.inActivePlan(runId)
     return tasks
-      .filter((t) => t.status === 'failed' || (t.status === 'cancelled' && this.missions.executionCount(t.missionId) > 0))
+      .filter((t) => inPlan(t) && (t.status === 'failed' || (t.status === 'cancelled' && this.missions.executionCount(t.missionId) > 0)))
       .map((t) => ({
         missionId: t.missionId,
         key: t.spec.key,
@@ -602,6 +603,8 @@ export class ConstellationEngine {
     const chosen = tasks.filter((t) => missionIds.includes(t.missionId))
     if (!chosen.length || chosen.length !== new Set(missionIds).size) throw new OrbitError('validation', 'Sélectionnez des sous-missions de cette exécution.')
     for (const t of chosen) if (t.status !== 'failed' && t.status !== 'cancelled') throw new OrbitError('conflict', `« ${t.spec.key} » n’est pas en échec : elle n’est pas relancée.`)
+    const inPlan = this.inActivePlan(runId)
+    for (const t of chosen) if (!inPlan(t)) throw new OrbitError('validation', `« ${t.spec.key} » ne fait plus partie du plan en cours : elle n’est pas relancée. Modifiez le plan pour la reprendre.`)
     for (const t of chosen) this.missions.reset(t.missionId)
     this.resetSkippedDependents(runId, new Set(chosen.map((t) => t.missionId)))
     this.log(runId, 'decision.retry', 'info', `Nouvelle tentative demandée pour : ${chosen.map((t) => t.spec.key).join(', ')}.`, { actor: 'user', data: { missionIds } })
@@ -648,7 +651,7 @@ export class ConstellationEngine {
     if (plan.status !== 'proposed') throw new OrbitError('conflict', `Le plan v${plan.version} n’est plus en attente.`)
     if (!this.log(runId, 'decision.reject', 'info', `Plan v${plan.version} refusé${feedback ? ` : ${feedback.slice(0, 200)}` : '.'}`, { actor: 'user', key: `reject:${planId}` })) return this.run(runId)
     this.markPlan(planId, 'rejected', 'user')
-    return this.askCoordinatorAgain(run, continuationPrompt({ kind: 'rejected', text: feedback, remaining: this.remainingSubtasks(runId), round: Math.max(1, run.round) }))
+    return this.askCoordinatorAgain(run, continuationPrompt({ kind: 'rejected', text: feedback, remaining: this.remainingSubtasks(runId), round: Math.max(1, run.round), usedIds: this.usedIds(runId) }))
   }
 
   /**
@@ -664,7 +667,7 @@ export class ConstellationEngine {
     if (pending) this.markPlan(pending.id, pending.tasks.length ? 'rejected' : 'approved', 'user')
     const kind = pending?.questions.length && !pending.tasks.length ? 'answer' : 'continue'
     this.log(runId, kind === 'answer' ? 'decision.answer' : 'decision.continue', 'info', kind === 'answer' ? 'Vous avez répondu aux questions du coordinateur.' : 'Nouvelle consigne transmise au coordinateur : la mission collective continue.', { actor: 'user', data: { text: text.slice(0, 2000) } })
-    return this.askCoordinatorAgain(run, continuationPrompt({ kind, text, questions: pending?.questions, remaining: this.remainingSubtasks(runId), round: Math.max(1, run.round) }))
+    return this.askCoordinatorAgain(run, continuationPrompt({ kind, text, questions: pending?.questions, remaining: this.remainingSubtasks(runId), round: Math.max(1, run.round), usedIds: this.usedIds(runId) }))
   }
 
   /** « Modifier le plan »: a new version (history kept), validated, then approved explicitly. */
@@ -674,10 +677,14 @@ export class ConstellationEngine {
     const tasks = this.tasks(runId)
     const frozen = new Map(tasks.filter((t) => t.status === 'done' || t.status === 'running' || this.missions.isRunning(t.missionId)).map((t) => [t.spec.key, t]))
     const records = input.map((t) => ({ id: t.id, assignee: t.assignee, objective: t.objective, expected: t.expected ?? '', context: t.context ?? '', dependsOn: t.dependsOn ?? [], readOnly: t.readOnly ?? false }))
+    const agentIdOf = (assignee: string) => this.agents.list().find((a) => a.id === assignee || a.name.toLowerCase() === assignee.toLowerCase())?.id ?? ''
     for (const r of records) {
       const f = frozen.get(r.id)
-      if (f && (f.spec.objective !== r.objective || f.spec.readOnly !== r.readOnly || f.agentId !== (this.agents.list().find((a) => a.id === r.assignee || a.name.toLowerCase() === r.assignee.toLowerCase())?.id ?? '') || [...f.spec.dependsOn].sort().join() !== [...r.dependsOn].sort().join()))
+      if (f && !sameWork({ agentId: f.agentId, ...f.spec }, { ...r, agentId: agentIdOf(r.assignee) }))
         throw new OrbitError('validation', `« ${r.id} » est déjà ${f.status === 'done' ? 'terminée' : 'en cours'} : elle ne peut plus être modifiée.`)
+      // An attempted (failed / interrupted) task keeps its history: its content can change, not its companion.
+      const attempted = tasks.find((t) => t.spec.key === r.id && !frozen.has(r.id) && this.missions.executionCount(t.missionId) > 0)
+      if (attempted && attempted.agentId !== agentIdOf(r.assignee)) throw new OrbitError('validation', `« ${r.id} » a déjà été tentée par un autre compagnon : gardez-le, ou créez une nouvelle sous-mission avec un autre identifiant.`)
     }
     const v = this.revalidate(runId, records)
     const plan = this.storePlan(runId, v, { source: 'user', round: Math.max(1, run.round), executionId: null, reason: 'Plan modifié par vous : vérifiez les différences puis approuvez.' })
@@ -699,7 +706,9 @@ export class ConstellationEngine {
     if (pending && !this.active.has(runId)) {
       const v = this.revalidate(runId, pending.tasks, pending.round)
       this.db.update(constellationPlans).set({ errors: v.errors }).where(eq(constellationPlans.id, pending.id)).run()
-      if (!v.errors.length) this.decideOrQueue(runId, this.plans(runId).find((p) => p.id === pending.id)!, pending.approvalReason)
+      // Older rows stored no reason for a blocked plan: recomputed (the policy still applies).
+      const reason = pending.approvalReason ?? this.approvalReason(runId, pending.tasks, pending.source, false)
+      if (!v.errors.length) this.decideOrQueue(runId, this.plans(runId).find((p) => p.id === pending.id)!, reason)
     }
     return this.run(runId)
   }
@@ -809,7 +818,12 @@ export class ConstellationEngine {
   // Reading a coordinator reply
 
   private existing(runId: string) {
-    return this.tasks(runId).map((t) => ({ key: t.spec.key, agentId: t.agentId, status: t.status }))
+    return this.tasks(runId).map((t) => ({ key: t.spec.key, agentId: t.agentId, status: t.status, spec: t.spec }))
+  }
+
+  /** Task ids already taken in the run (told to the coordinator so it never reuses a finished one). */
+  private usedIds(runId: string): string[] {
+    return this.tasks(runId).map((t) => t.spec.key)
   }
 
   private remainingSubtasks(runId: string) {
@@ -862,7 +876,9 @@ export class ConstellationEngine {
       if (limitOnly) {
         // Keep the tasks so the user can raise the limits and approve without asking again.
         const cand = this.candidates(runId, text)
-        const plan = this.storePlan(runId, { ...v, tasks: cand }, { source: via, round: nextRound, executionId, reason: via === 'conversation' ? this.conversationReason : null })
+        // The approval it will need once the limits allow it (policy, coordinator's request, conversation).
+        const reason = this.approvalReason(runId, cand, via, v.requestApproval)
+        const plan = this.storePlan(runId, { ...v, tasks: cand }, { source: via, round: nextRound, executionId, reason })
         this.log(runId, 'plan.blocked', 'warning', `Plan v${plan.version} de ${coordName} hors limites : ${v.errors.join(' ')}`)
         this.transition(runId, null, 'blocked', { error: `${v.errors.join(' ')} Relevez les limites de cette exécution ou modifiez le plan.`, synthesis: reply || run.synthesis, phase: 'planning' })
         this.notifyAttention(runId, 'Constellation bloquée', v.errors.join(' '))
@@ -1005,6 +1021,17 @@ export class ConstellationEngine {
     return this.plans(runId).filter((p) => p.status === 'approved' && p.tasks.length).at(-1) ?? null
   }
 
+  /**
+   * Only tasks of the plan being executed can be retried: executePlan runs nothing else, and an
+   * older task the current plan dropped (or superseded) must not come back by a retry.
+   */
+  private inActivePlan(runId: string): (t: ConstellationTask) => boolean {
+    const plan = this.activePlan(runId)
+    if (!plan) return () => true
+    const keys = new Set(plan.tasks.map((p) => p.id))
+    return (t) => keys.has(t.spec.key)
+  }
+
   private taskSettled(tasks: ConstellationTask[], key: string) {
     const t = tasks.find((x) => x.spec.key === key)
     return Boolean(t && TERMINAL_MISSION_STATUSES.includes(t.status))
@@ -1030,7 +1057,15 @@ export class ConstellationEngine {
       const prev = byKey.get(t.id)
       if (prev) {
         const started = this.missions.executionCount(prev.missionId) > 0
-        if (started || prev.status === 'done') continue // finished or attempted: kept as is (retry is explicit)
+        if (prev.status === 'done' || this.missions.isRunning(prev.missionId)) continue // finished or running: kept as is
+        if (started) {
+          // Attempted (failed / interrupted): the edited content is kept for the explicit retry; history stays.
+          if (prev.agentId === agent.id && (prev.status === 'failed' || prev.status === 'cancelled') && !sameWork({ agentId: prev.agentId, ...prev.spec }, { ...t, agentId: agent.id })) {
+            this.db.update(missions).set({ subtask: spec, title: t.objective.split('\n')[0]!.slice(0, 150), description: t.objective, permissionsOverride: perms, updatedAt: nowIso() }).where(eq(missions.id, prev.missionId)).run()
+            updated.push(t.id)
+          }
+          continue
+        }
         if (prev.agentId !== agent.id) {
           this.db.delete(missions).where(eq(missions.id, prev.missionId)).run()
         } else {
@@ -1066,8 +1101,10 @@ export class ConstellationEngine {
   /** Failed tasks (and never-started dependents) skipped on the user's decision. */
   private skipFailed(runId: string) {
     const tasks = this.tasks(runId)
-    const failed = new Set(tasks.filter((t) => t.status === 'failed').map((t) => t.missionId))
-    for (const t of tasks) if (t.status === 'failed') this.db.update(missions).set({ status: 'cancelled', error: `${t.error ?? 'Échec'} — ${SKIPPED_MARK}.`, updatedAt: nowIso() }).where(eq(missions.id, t.missionId)).run()
+    // Failed, or interrupted after it started (time limit, restart): both are gone past.
+    const skipped = tasks.filter((t) => this.failedAttempt(t))
+    const failed = new Set(skipped.map((t) => t.missionId))
+    for (const t of skipped) this.db.update(missions).set({ status: 'cancelled', error: `${t.error ?? (t.status === 'failed' ? 'Échec' : 'Interrompue')} — ${SKIPPED_MARK}.`, updatedAt: nowIso() }).where(eq(missions.id, t.missionId)).run()
     let changed = true
     while (changed) {
       changed = false
@@ -1080,11 +1117,12 @@ export class ConstellationEngine {
   }
 
   private resetSkippedDependents(runId: string, roots: Set<string>) {
+    const inPlan = this.inActivePlan(runId)
     let changed = true
     while (changed) {
       changed = false
       for (const t of this.tasks(runId)) {
-        if (t.status !== 'cancelled' || roots.has(t.missionId) || this.missions.executionCount(t.missionId) > 0) continue
+        if (t.status !== 'cancelled' || roots.has(t.missionId) || !inPlan(t) || this.missions.executionCount(t.missionId) > 0) continue
         if (t.dependsOnMissionIds.some((d) => roots.has(d))) {
           this.missions.reset(t.missionId)
           roots.add(t.missionId)
@@ -1103,7 +1141,7 @@ export class ConstellationEngine {
     const coord = this.missions.get(run.coordinatorMissionId)
     const coordUnread = coord.status !== 'done' || this.lastExecutionId(coord.id) !== this.runRow(runId).lastIngestedExecutionId
     if (run.phase === 'synthesizing' && coordUnread) return { kind: 'synthesize' }
-    if (!plan) return { kind: 'coordinator', prompt: continuationPrompt({ kind: 'resume', text: 'Orbit a été interrompu ou arrêté. Reprends la planification.', remaining: this.remainingSubtasks(runId), round: Math.max(1, run.round) }), phase: 'planning' }
+    if (!plan) return { kind: 'coordinator', prompt: continuationPrompt({ kind: 'resume', text: 'Orbit a été interrompu ou arrêté. Reprends la planification.', remaining: this.remainingSubtasks(runId), round: Math.max(1, run.round), usedIds: this.usedIds(runId) }), phase: 'planning' }
     const planTasks = tasks.filter((t) => plan.tasks.some((p) => p.id === t.spec.key))
     if (planTasks.some((t) => t.status === 'todo' || t.status === 'approval_required')) return { kind: 'execute' }
     if (planTasks.some((t) => this.failedAttempt(t))) return { kind: 'stop' }
@@ -1228,13 +1266,16 @@ export class ConstellationEngine {
   private timeLimit(runId: string) {
     const state = this.active.get(runId)
     const run = this.run(runId)
+    // Only active work is stopped: a run cancelled, finished or waiting meanwhile keeps its state.
+    const from: ConstellationRunStatus[] = [...ACTIVE_RUN_STATUSES, 'paused']
+    if (!from.includes(run.status)) return
     const reason = `Durée maximale atteinte (${run.limits.maxDurationMin} min de travail) : la constellation a été arrêtée. Relevez la limite puis reprenez ; les sous-missions interrompues sont à vérifier avant de les réessayer.`
     state?.controller.abort()
     for (const t of this.tasks(runId)) if (this.missions.isRunning(t.missionId)) this.missions.cancel(t.missionId)
     if (run.coordinatorMissionId && this.missions.isRunning(run.coordinatorMissionId)) this.missions.cancel(run.coordinatorMissionId)
     this.event(runId, 'error', run.coordinatorAgentId, null, null)
+    if (!this.transition(runId, from, 'blocked', { error: reason })) return
     this.log(runId, 'limit.duration', 'warning', reason)
-    this.transition(runId, null, 'blocked', { error: reason })
     this.notifyAttention(runId, 'Constellation bloquée', reason)
   }
 
@@ -1284,7 +1325,7 @@ export class ConstellationEngine {
         this.db.update(constellationRuns).set({ coordinatorMissionId: coordId, round: 1 }).where(eq(constellationRuns.id, runId)).run()
         this.missions.start(coordId, run.origin)
       } else {
-        this.missions.followUp(coordId, prompt ?? continuationPrompt({ kind: 'resume', text: '', remaining: this.remainingSubtasks(runId), round: Math.max(1, run.round) }), run.origin)
+        this.missions.followUp(coordId, prompt ?? continuationPrompt({ kind: 'resume', text: '', remaining: this.remainingSubtasks(runId), round: Math.max(1, run.round), usedIds: this.usedIds(runId) }), run.origin)
       }
       await this.waitText(coordId, state.controller.signal)
     } finally {
@@ -1312,7 +1353,7 @@ export class ConstellationEngine {
     const thisRound = inPlan.filter((t) => t.spec.round === round)
     const results = (thisRound.length ? thisRound : inPlan).map((t) => ({ key: t.spec.key, agentName: this.safeAgent(t.agentId)?.name ?? '?', status: t.status === 'done' ? 'terminée' : t.status === 'failed' ? `échec : ${t.error ?? ''}` : 'non exécutée', text: t.structured?.summary ? `${t.structured.summary}\n\n${stripProtocol(t.result ?? '')}` : stripProtocol(t.result ?? '') }))
     const canDelegateAgain = round < run.limits.maxDepth && all.length < run.limits.maxSubtasks && Boolean(coordMember?.canDelegate) && !this.overBudget(runId).over
-    const sp = synthesisPrompt({ results, round, canDelegateAgain, remaining: run.limits.maxSubtasks - all.length })
+    const sp = synthesisPrompt({ results, round, canDelegateAgain, remaining: run.limits.maxSubtasks - all.length, usedIds: all.map((t) => t.spec.key) })
     this.handoff(runId, 'synthesis', 'orbit', coordinator.id, run.coordinatorMissionId, `Résultats du tour ${round} transmis à ${coordinator.name}`, sp.prompt, sp.redactions)
     this.event(runId, 'synthesis', null, coordinator.id, run.coordinatorMissionId)
     this.log(runId, 'round.done', 'success', `Tour ${round} terminé : résultats transmis à ${coordinator.name} pour la synthèse.`)
@@ -1403,6 +1444,14 @@ export class ConstellationEngine {
       if (signal.aborted) break
       const stopStarting = this.paused(runId) || limit !== null
       const fresh = this.tasks(runId).filter((t) => keys.has(t.spec.key))
+      // Started by an earlier drive (restart, time limit) and still waiting for its start approval,
+      // or running: awaited and post-processed like any other (never orphaned, never restarted).
+      for (const t of fresh) {
+        if (running.has(t.missionId) || !(t.status === 'approval_required' || this.missions.isRunning(t.missionId))) continue
+        const agent = this.safeAgent(t.agentId)
+        if (!agent) continue
+        running.set(t.missionId, this.settleTask(runId, coordinator, agent, t, signal).finally(() => running.delete(t.missionId)))
+      }
       const todo = stopStarting ? [] : fresh.filter((t) => t.status === 'todo' && !running.has(t.missionId))
       let started = 0
       for (const t of todo) {
@@ -1477,8 +1526,17 @@ export class ConstellationEngine {
     } catch (err) {
       return fail(err instanceof Error ? err.message : String(err))
     }
+    await this.settleTask(runId, coordinator, agent, t, signal)
+  }
+
+  /**
+   * Waits for a started sub-mission (start approval included) and records its outcome. Also used
+   * for one started by an earlier drive (restart, time limit) and still awaiting its approval.
+   */
+  private async settleTask(runId: string, coordinator: Agent, agent: Agent, t: ConstellationTask, signal: AbortSignal): Promise<void> {
     await this.waitText(t.missionId, signal)
     const m = this.missions.get(t.missionId)
+    if (m.status === 'approval_required') return // drive stopped while it waits: adopted by the next one
     const text = this.lastSettledText(t.missionId) ?? m.result ?? ''
     if (m.status === 'done') {
       const structured = parseResult(text)
@@ -1512,10 +1570,12 @@ export class ConstellationEngine {
     const run = this.run(runId)
     const t = this.totals(runId)
     if (run.limits.maxTokens != null && t.tokens >= run.limits.maxTokens) return { over: true, reason: `Limite de jetons atteinte (${t.tokens.toLocaleString('fr-FR')} / ${run.limits.maxTokens.toLocaleString('fr-FR')}).` }
-    if (run.limits.maxBudgetUsd != null && t.costUsd != null) {
+    if (run.limits.maxBudgetUsd != null) {
+      // Nothing measured yet (subscription coordinator) still reserves for the tasks about to start.
+      const spent = t.costUsd ?? 0
       const finished = this.tasks(runId).filter((x) => x.costUsd != null && TERMINAL_MISSION_STATUSES.includes(x.status))
       const reservation = finished.length ? finished.reduce((s, x) => s + (x.costUsd ?? 0), 0) / finished.length : run.limits.maxBudgetUsd / Math.max(1, run.limits.maxSubtasks)
-      if (t.costUsd + reservation * inFlight > run.limits.maxBudgetUsd) return { over: true, reason: `Budget de la constellation atteint (${t.costUsd.toFixed(2)} $ dépensés, ${(reservation * inFlight).toFixed(2)} $ réservés, limite ${run.limits.maxBudgetUsd.toFixed(2)} $).` }
+      if (spent + reservation * inFlight > run.limits.maxBudgetUsd) return { over: true, reason: `Budget de la constellation atteint (${spent.toFixed(2)} $ dépensés, ${(reservation * inFlight).toFixed(2)} $ réservés, limite ${run.limits.maxBudgetUsd.toFixed(2)} $).` }
     }
     return { over: false, reason: null }
   }
