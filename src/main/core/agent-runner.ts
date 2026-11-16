@@ -1,3 +1,5 @@
+import { mkdirSync } from 'node:fs'
+import { isAbsolute, relative, resolve as resolvePath } from 'node:path'
 import { and, eq } from 'drizzle-orm'
 import type { Agent, ExecutionEvent, LiveActivity, Mission, ToolCall } from '@shared/types'
 import type { OrbitDb } from '../infra/db/client'
@@ -277,6 +279,7 @@ export class AgentRunner {
 
     setActivity('starting', `Démarre ${job.engine.name}`)
     const permissions = job.permissions ?? agent.permissions
+    const writeScopes = this.writeScopesFor(mission, workspace, permissions.writeFiles && !job.remote)
     const shared = (this.activeWorkspaces.get(workspace) ?? 0) > 0
     this.activeWorkspaces.set(workspace, (this.activeWorkspaces.get(workspace) ?? 0) + 1)
     const epoch = (this.workspaceEpoch.get(workspace) ?? 0) + 1
@@ -301,6 +304,7 @@ export class AgentRunner {
             // Autonomous companions run without the engine's command sandbox.
             commandsContained: !job.remote && agent.autonomy !== 'autonomous' && job.engine.capabilities.containsCommands === true,
             protectedPaths: job.remote ? [] : this.protectedPaths,
+            writeScopes,
           },
           secret: job.secret,
           budgetUsd: job.budgetUsd,
@@ -351,6 +355,21 @@ export class AgentRunner {
    * Merges the engine's own file reports with Orbit's before/after snapshot, so shell
    * modifications appear too. Records how complete the list is - never claims more.
    */
+  /**
+   * Absolute write scopes of a delegated sub-mission, created up front: the engine's command
+   * sandbox only opens existing folders, so `mkdir` of a scope from inside it would fail.
+   */
+  private writeScopesFor(mission: Mission, workspace: string, local: boolean): string[] | undefined {
+    const spec = mission.subtask
+    if (!spec || spec.readOnly || !spec.writes?.length) return undefined
+    const scopes = spec.writes.map((w) => resolvePath(workspace, w)).filter((abs) => {
+      const rel = relative(workspace, abs)
+      return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+    })
+    if (local) for (const dir of scopes) mkdirSync(dir, { recursive: true })
+    return scopes.length ? scopes : undefined
+  }
+
   private async recordInventory(o: { missionId: string; executionId: string; agentId: string; snapshot: Awaited<ReturnType<typeof takeSnapshot>>; concurrent: boolean; engineReportsFiles: boolean; remote: boolean }) {
     const notes: string[] = []
     let complete: boolean

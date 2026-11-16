@@ -8,7 +8,7 @@ import { engineConfinement } from '../security/seatbelt'
 import { allowedClaudeTools, changedPathFor, describeClaudeTool, permissionModeWarning } from './claude-agent'
 import { createClaudeGate } from './gate'
 import { spawnLineProcess, type LineProcess, type LineProcessOptions } from './process'
-import { EngineError, type AgentEngine, type EngineIO, type EngineReadiness, type EngineRunRequest, type EngineRunResult, type ToolStart, type UsageReport } from './types'
+import { EngineError, writeRoots, type AgentEngine, type EngineIO, type EngineReadiness, type EngineRunRequest, type EngineRunResult, type ToolStart, type UsageReport } from './types'
 
 const run = promisify(execFile)
 
@@ -152,7 +152,7 @@ export function claudeSandboxSettings(req: EngineRunRequest): Record<string, unk
       failIfUnavailable: p.commandsContained === true,
       autoAllowBashIfSandboxed: false,
       allowUnsandboxedCommands: false,
-      filesystem: { allowWrite: p.permissions.writeFiles ? [p.workspace, tmpdir()] : [tmpdir()] },
+      filesystem: { allowWrite: p.permissions.writeFiles ? [...writeRoots(p), tmpdir()] : [tmpdir()] },
     },
   }
 }

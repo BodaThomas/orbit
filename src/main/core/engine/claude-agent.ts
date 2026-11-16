@@ -8,7 +8,7 @@ import { confine, engineConfinement } from '../security/seatbelt'
 import type { ToolKind } from '@shared/types'
 import { createClaudeGate } from './gate'
 import type { ToolAction } from './policy'
-import { EngineError, type AgentEngine, type EngineIO, type EngineRunRequest, type EngineRunResult, type RunPolicy, type ToolStart, type UsageReport } from './types'
+import { EngineError, writeRoots, type AgentEngine, type EngineIO, type EngineRunRequest, type EngineRunResult, type RunPolicy, type ToolStart, type UsageReport } from './types'
 
 type QueryFn = (params: { prompt: string; options?: Options }) => Query
 
@@ -206,7 +206,7 @@ export function createClaudeAgentEngine(opts: ClaudeEngineOptions): AgentEngine 
           failIfUnavailable: policy.commandsContained === true,
           autoAllowBashIfSandboxed: false,
           allowUnsandboxedCommands: false,
-          filesystem: { allowWrite: policy.permissions.writeFiles ? [policy.workspace, tmpdir()] : [tmpdir()] },
+          filesystem: { allowWrite: policy.permissions.writeFiles ? [...writeRoots(policy), tmpdir()] : [tmpdir()] },
         },
         includePartialMessages: true,
         maxBudgetUsd: req.budgetUsd ?? undefined,

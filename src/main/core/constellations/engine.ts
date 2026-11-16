@@ -43,7 +43,7 @@ import type { Journal } from '../journal'
 import { intersectPermissions, type MissionManager, type MissionSettled } from '../missions'
 import type { ProviderRegistry } from '../providers'
 import { newId, nowIso, OrbitError } from '../util'
-import { continuationPrompt, diffPlans, handoffPrompt, parseResult, planHash, planningPrompt, sameWork, stripProtocol, synthesisPrompt, validatePlan, type PlanValidation } from './protocol'
+import { continuationPrompt, diffPlans, handoffPrompt, parseResult, planHash, planningPrompt, sameWork, scopesOverlap, stripProtocol, synthesisPrompt, validatePlan, type PlanValidation } from './protocol'
 import { addWorktree, branchDiff, commitAll, conflictsBetween, diffStat, headRef, mergeBranch, removeWorktree, repoRoot } from './worktrees'
 
 /** Orbit Desktop: runs whose companions all live on one runtime are coordinated there. */
@@ -79,13 +79,14 @@ export interface PlanTaskInput {
   context?: string
   dependsOn?: string[]
   readOnly?: boolean
+  writes?: string[]
 }
 
 interface RunState {
   controller: AbortController
   timer: ReturnType<typeof setTimeout> | null
-  /** workspace → mission id currently holding the writer lock (shared mode). */
-  writerLocks: Map<string, string>
+  /** Writers running in a shared folder: mission id → folder and write scopes (empty → the whole folder). */
+  writerLocks: Map<string, { workspace: string; writes: string[] }>
   /** When this drive started (active time accounting). */
   since: number
   /** Set while the loop itself is talking to the coordinator. */
@@ -676,7 +677,7 @@ export class ConstellationEngine {
     if (this.active.has(runId)) throw new OrbitError('conflict', 'Mettez d’abord la constellation en pause.')
     const tasks = this.tasks(runId)
     const frozen = new Map(tasks.filter((t) => t.status === 'done' || t.status === 'running' || this.missions.isRunning(t.missionId)).map((t) => [t.spec.key, t]))
-    const records = input.map((t) => ({ id: t.id, assignee: t.assignee, objective: t.objective, expected: t.expected ?? '', context: t.context ?? '', dependsOn: t.dependsOn ?? [], readOnly: t.readOnly ?? false }))
+    const records = input.map((t) => ({ id: t.id, assignee: t.assignee, objective: t.objective, expected: t.expected ?? '', context: t.context ?? '', dependsOn: t.dependsOn ?? [], readOnly: t.readOnly ?? false, writes: t.readOnly ? [] : (t.writes ?? []) }))
     const agentIdOf = (assignee: string) => this.agents.list().find((a) => a.id === assignee || a.name.toLowerCase() === assignee.toLowerCase())?.id ?? ''
     for (const r of records) {
       const f = frozen.get(r.id)
@@ -749,7 +750,7 @@ export class ConstellationEngine {
     rounds.forEach((round, i) => {
       const records: PlanTaskRecord[] = tasks
         .filter((t) => (t.spec.round || 1) === round)
-        .map((t) => ({ id: t.spec.key, assignee: this.safeAgent(t.agentId)?.name ?? t.agentId, agentId: t.agentId, objective: t.spec.objective, expected: t.spec.expected, context: t.spec.context, dependsOn: t.spec.dependsOn, readOnly: t.spec.readOnly }))
+        .map((t) => ({ id: t.spec.key, assignee: this.safeAgent(t.agentId)?.name ?? t.agentId, agentId: t.agentId, objective: t.spec.objective, expected: t.spec.expected, context: t.spec.context, dependsOn: t.spec.dependsOn, readOnly: t.spec.readOnly, writes: t.spec.writes ?? [] }))
       this.db.insert(constellationPlans).values({ id: newId(), runId, version: i + 1, round, status: 'approved', hash: planHash(records), tasks: records, questions: [], note: null, errors: [], source: 'coordinator', sourceExecutionId: null, approvalReason: null, createdAt: tasks.find((t) => (t.spec.round || 1) === round)?.startedAt ?? nowIso(), decidedAt: nowIso(), decidedBy: 'policy' }).run()
     })
   }
@@ -830,11 +831,11 @@ export class ConstellationEngine {
     return Math.max(0, this.run(runId).limits.maxSubtasks - this.tasks(runId).length)
   }
 
-  private revalidate(runId: string, tasks: Pick<PlanTaskRecord, 'id' | 'assignee' | 'objective' | 'expected' | 'context' | 'dependsOn' | 'readOnly'>[], round?: number): PlanValidation {
+  private revalidate(runId: string, tasks: Pick<PlanTaskRecord, 'id' | 'assignee' | 'objective' | 'expected' | 'context' | 'dependsOn' | 'readOnly' | 'writes'>[], round?: number): PlanValidation {
     const run = this.run(runId)
     const def = this.get(run.constellationId)
     const coord = def.members.find((m) => m.agentId === def.coordinatorAgentId)
-    const text = '```orbit-plan\n' + JSON.stringify({ tasks: tasks.map((t) => ({ id: t.id, assignee: t.assignee, objective: t.objective, expected: t.expected, context: t.context, dependsOn: t.dependsOn, readOnly: t.readOnly })) }) + '\n```'
+    const text = '```orbit-plan\n' + JSON.stringify({ tasks: tasks.map((t) => ({ id: t.id, assignee: t.assignee, objective: t.objective, expected: t.expected, context: t.context, dependsOn: t.dependsOn, readOnly: t.readOnly, writes: t.writes ?? [] })) }) + '\n```'
     const v = validatePlan(text, { definition: { ...def, limits: run.limits }, agents: this.agents.list(), existing: this.existing(runId), coordinatorCanDelegate: coord?.canDelegate ?? false })
     if (round && round > run.limits.maxDepth) v.errors.push(`Profondeur maximale atteinte : tour ${round}, limite ${run.limits.maxDepth}.`)
     return v
@@ -926,7 +927,7 @@ export class ConstellationEngine {
     }
 
     // 4. A plan with tasks.
-    const records = v.tasks.map((t) => ({ id: t.id, assignee: t.assignee, agentId: t.agentId, objective: t.objective, expected: t.expected, context: t.context, dependsOn: t.dependsOn, readOnly: t.readOnly }))
+    const records = v.tasks.map((t) => ({ id: t.id, assignee: t.assignee, agentId: t.agentId, objective: t.objective, expected: t.expected, context: t.context, dependsOn: t.dependsOn, readOnly: t.readOnly, writes: t.writes }))
     const hash = planHash(records)
     const same = this.plans(runId).filter((p) => p.hash === hash && (p.status === 'approved' || p.status === 'proposed')).at(-1)
     if (same) {
@@ -991,7 +992,7 @@ export class ConstellationEngine {
   }
 
   private storePlan(runId: string, v: Pick<PlanValidation, 'tasks' | 'errors' | 'questions' | 'note'>, o: { source: ConstellationPlan['source']; round: number; executionId: string | null; reason: string | null }): ConstellationPlan {
-    const records: PlanTaskRecord[] = v.tasks.map((t) => ({ id: t.id, assignee: this.safeAgent(t.agentId)?.name ?? t.assignee, agentId: t.agentId, objective: t.objective, expected: t.expected, context: t.context, dependsOn: t.dependsOn, readOnly: t.readOnly }))
+    const records: PlanTaskRecord[] = v.tasks.map((t) => ({ id: t.id, assignee: this.safeAgent(t.agentId)?.name ?? t.assignee, agentId: t.agentId, objective: t.objective, expected: t.expected, context: t.context, dependsOn: t.dependsOn, readOnly: t.readOnly, writes: t.writes }))
     const id = newId()
     this.db.transaction((tx) => {
       const version = (tx.select({ v: constellationPlans.version }).from(constellationPlans).where(eq(constellationPlans.runId, runId)).orderBy(desc(constellationPlans.version)).limit(1).get()?.v ?? 0) + 1
@@ -1052,7 +1053,7 @@ export class ConstellationEngine {
     const updated: string[] = []
     for (const t of plan.tasks) {
       const agent = this.agents.get(t.agentId)
-      const spec: SubtaskSpec = { key: t.id, objective: t.objective, expected: t.expected, context: t.context, dependsOn: t.dependsOn, readOnly: t.readOnly, round: plan.round }
+      const spec: SubtaskSpec = { key: t.id, objective: t.objective, expected: t.expected, context: t.context, dependsOn: t.dependsOn, readOnly: t.readOnly, writes: t.writes ?? [], round: plan.round }
       const perms = intersectPermissions(def.permissions, t.readOnly ? { ...def.permissions, writeFiles: false, runCommands: false } : null)
       const prev = byKey.get(t.id)
       if (prev) {
@@ -1370,6 +1371,20 @@ export class ConstellationEngine {
     return out
   }
 
+  /**
+   * Write scopes the scheduler may rely on to run writers side by side. Only when Orbit holds
+   * the task to them: a local run, and commands confined by the engine's sandbox whenever the
+   * task may run any. Otherwise the task locks the whole folder, as if it declared no scope.
+   */
+  private lockScopes(t: ConstellationTask): string[] {
+    const writes = t.spec.writes ?? []
+    if (!writes.length) return []
+    const agent = this.safeAgent(t.agentId)
+    if (!agent || agent.runtime !== 'local') return []
+    if (t.permissions.runCommands && (agent.autonomy === 'autonomous' || this.providers.engine(agent.providerId)?.capabilities.containsCommands !== true)) return []
+    return writes
+  }
+
   /** Worktree per writer agent when requested and possible; otherwise the shared folder. */
   private async workspaceFor(runId: string, def: ConstellationDefinition, agent: Agent, t: ConstellationTask): Promise<string | null> {
     const base = def.workspace ?? agent.workingDirectory
@@ -1465,16 +1480,17 @@ export class ConstellationEngine {
           limit = over.reason
           break
         }
-        // Shared folder: one writer at a time (readers run in parallel).
+        // Shared folder: writers whose scopes overlap run one at a time (readers run in parallel).
         const writer = (t.permissions.writeFiles || t.permissions.runCommands) && !t.spec.readOnly && t.workspace
-        if (writer && def.workspaceMode === 'shared' && state.writerLocks.has(t.workspace!)) continue
-        if (writer && t.workspace) state.writerLocks.set(t.workspace, t.missionId)
+        const writes = writer ? this.lockScopes(t) : []
+        if (writer && def.workspaceMode === 'shared' && [...state.writerLocks.values()].some((l) => l.workspace === t.workspace && scopesOverlap(l.writes, writes))) continue
+        if (writer) state.writerLocks.set(t.missionId, { workspace: t.workspace!, writes })
         started++
         running.set(
           t.missionId,
           this.runTask(runId, coordinator, t, signal).finally(() => {
             running.delete(t.missionId)
-            if (writer && t.workspace && state.writerLocks.get(t.workspace) === t.missionId) state.writerLocks.delete(t.workspace)
+            state.writerLocks.delete(t.missionId)
           }),
         )
       }

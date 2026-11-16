@@ -759,6 +759,8 @@ export interface PlanTaskRecord {
   context: string
   dependsOn: string[]
   readOnly: boolean
+  /** Folders (relative to the workspace) the task may write; empty or absent → the whole folder. */
+  writes?: string[]
 }
 
 export interface PlanDiff {
@@ -812,6 +814,8 @@ export interface SubtaskSpec {
   context: string
   dependsOn: string[]
   readOnly: boolean
+  /** Folders (relative to the workspace) the task may write; empty or absent → the whole folder. */
+  writes?: string[]
   round: number
 }
 
