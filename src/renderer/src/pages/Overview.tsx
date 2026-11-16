@@ -3,7 +3,6 @@ import { CheckCircle2, Plus, Rocket, ShieldCheck } from 'lucide-react'
 import { ACTIVE_MISSION_STATUSES } from '@shared/mission-states'
 import { Page, PageHeader, Panel, PanelLink } from '@/components/shell/Page'
 import { Button } from '@/components/ui/button'
-import { Kbd } from '@/components/ui/field'
 import { Skeleton } from '@/components/ui/field'
 import { longDate, greeting, relative, money, moneyParts, integer, pricedCost } from '@/lib/format'
 import { cn } from '@/lib/cn'
@@ -11,6 +10,7 @@ import { useCompanionStates } from '@/lib/companion-state'
 import { useActivity, useAgents, useBootstrap, useInbox, useMissions, useProviders, useUsage } from '@/lib/queries'
 import { ActivityEventRow } from '@/orbit/ActivityEvent'
 import { OverviewMotion } from '@/orbit/OverviewMotion'
+import { HomeViewSwitch } from '@/orbit/HomeViewSwitch'
 import { InboxList } from '@/orbit/InboxList'
 import { CompanionAvatar } from '@/orbit/CompanionAvatar'
 import { CompanionCard } from '@/orbit/CompanionCard'
@@ -104,9 +104,7 @@ export function OverviewPage() {
         }
         actions={
           <>
-            <Button variant="ghost" onClick={() => useUi.getState().setPaletteOpen(true)}>
-              Rechercher <Kbd>⌘K</Kbd>
-            </Button>
+            <HomeViewSwitch value="dashboard" />
             <Button variant="primary" onClick={() => useUi.getState().openNewMission(null)} disabled={!list.length}>
               <Plus /> Nouvelle mission
             </Button>
@@ -185,7 +183,7 @@ export function OverviewPage() {
           <OverviewMotion />
           <div className="mb-2.5 flex items-center justify-between">
             <h2 className="text-[13px] font-medium text-fg-2">{active.length ? 'Compagnons actifs' : 'Vos compagnons'}</h2>
-            <PanelLink onClick={() => navigate('/universe')}>Voir mon univers</PanelLink>
+            <PanelLink onClick={() => navigate('/companions')}>Tous les compagnons</PanelLink>
           </div>
           <div className="mb-6 grid grid-cols-[repeat(auto-fill,minmax(232px,1fr))] gap-3">
             {agents.isLoading

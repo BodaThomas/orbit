@@ -12,6 +12,7 @@ import { duration, relative } from '@/lib/format'
 import { useAgents, useAutomations, useConstellationRuns, useConstellations, useMissions, useRemoteMachines } from '@/lib/queries'
 import { CompanionAvatar, statusColorClass } from '@/orbit/CompanionAvatar'
 import { OrbitEmptyState } from '@/orbit/EmptyState'
+import { HomeViewSwitch } from '@/orbit/HomeViewSwitch'
 import { navigate } from '@/stores/router'
 
 /**
@@ -185,6 +186,9 @@ export function UniversePage() {
       </div>
 
       <header className="pointer-events-none absolute top-[30px] left-8 z-20">
+        <div className="no-drag pointer-events-auto mb-3 w-fit">
+          <HomeViewSwitch value="universe" />
+        </div>
         <h1 className="text-[24px] leading-8 font-semibold tracking-[-0.02em] text-fg">Mon univers</h1>
         <p className="mt-0.5 text-[13.5px] text-fg-2">
           {list.length ? `${list.length} compagnon${list.length > 1 ? 's' : ''} en orbite` : 'Aucun compagnon'}

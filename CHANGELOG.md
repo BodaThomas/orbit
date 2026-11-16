@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Automations: the form says which field blocks saving instead of only disabling the button.
 - Disabled buttons on the constellations page explain why in a tooltip.
 - Mission filters and the list/board choice are kept when you leave the page and come back.
+- The sidebar is grouped by use: daily work (**Accueil** (home), Missions, Constellations, Automations), then your companions, then system pages (Activity, Statistics, Machines, Settings). The overview and **Mon univers** (my universe) are now two views of the home page, and keyboard shortcuts ⌘1 to ⌘8 follow the sidebar order.
 - The interface uses one word per concept: **moteur** (engine) instead of provider or intelligence, **accord** (consent) for every approval, **dossier de travail** (working folder), **budget** for spending limits, **machine** for remote servers and **coordinateur** for the constellation lead. A constellation run is called a **mission collective** (team mission) everywhere, and stopping one now says **Arrêter** (stop) instead of « Annuler ».
 
 ### Fixed

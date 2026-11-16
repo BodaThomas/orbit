@@ -205,12 +205,17 @@ function installMenu() {
       {
         label: 'Aller',
         submenu: [
-          { label: 'Vue d’ensemble', accelerator: 'Cmd+1', click: go('/') },
-          { label: 'Mon univers', accelerator: 'Cmd+2', click: go('/universe') },
-          { label: 'Compagnons', accelerator: 'Cmd+3', click: go('/companions') },
-          { label: 'Missions', accelerator: 'Cmd+4', click: go('/missions') },
-          { label: 'Activité', accelerator: 'Cmd+5', click: go('/activity') },
-          { label: 'Statistiques', accelerator: 'Cmd+6', click: go('/analytics') },
+          { label: 'Accueil', accelerator: 'Cmd+1', click: go('/') },
+          { label: 'Missions', accelerator: 'Cmd+2', click: go('/missions') },
+          { label: 'Constellations', accelerator: 'Cmd+3', click: go('/constellations') },
+          { label: 'Automatisations', accelerator: 'Cmd+4', click: go('/automations') },
+          { label: 'Compagnons', accelerator: 'Cmd+5', click: go('/companions') },
+          { type: 'separator' },
+          { label: 'Activité', accelerator: 'Cmd+6', click: go('/activity') },
+          { label: 'Statistiques', accelerator: 'Cmd+7', click: go('/analytics') },
+          { label: 'Machines', accelerator: 'Cmd+8', click: go('/machines') },
+          { type: 'separator' },
+          { label: 'Mon univers', click: go('/universe') },
         ],
       },
       {
