@@ -214,6 +214,42 @@ describe('agent missions (engine + runner + persistence)', () => {
     expect(core.notified.some((n) => n.startsWith('Mission échouée'))).toBe(true)
   })
 
+  it('a follow-up awaiting its start approval keeps its prompt and result; the approval cannot be skipped', async () => {
+    const core = setup('codex', async (req) => ok(req, req.prompt.startsWith('Continue') ? '' : 'Premier résultat.'))
+    const m = core.missions.create({ title: 'Suivi', description: '', agentId: core.agent.id, priority: 'normal', startNow: true })
+    await waitFor(() => core.missions.get(m.id).status === 'done')
+
+    // Automation + supervised + sensitive permissions → the start needs the user's approval.
+    expect(core.missions.followUp(m.id, 'Continue avec les tests', 'automation').status).toBe('approval_required')
+    expect(() => core.missions.start(m.id, 'automation')).toThrow(/approbation en attente/)
+    const approval = core.missions.approvals('pending').find((a) => a.kind === 'mission_start')!
+    core.missions.resolveApproval(approval.id, true)
+    await waitFor(() => core.missions.get(m.id).status === 'done')
+    expect(core.requests[1]!.prompt).toBe('Continue avec les tests')
+    expect(core.missions.get(m.id).result).toBe('Premier résultat.')
+  })
+
+  it('a refused follow-up or retry leaves the mission where it was', async () => {
+    const core = setup('claude-agent', async (req) => ok(req))
+    core.agents.update(core.agent.id, { dailyBudgetUsd: 1 })
+    const m = core.missions.create({ title: 'Fini', description: '', agentId: core.agent.id, priority: 'normal', startNow: true })
+    await waitFor(() => core.missions.get(m.id).status === 'done')
+    core.usage.record({ agentId: core.agent.id, providerId: 'claude-agent', model: 'claude-opus-5-5', inputTokens: 0, outputTokens: 0, source: 'mission', cost: { costUsd: 2, costKind: 'estimated', pricingVersion: 'test' } })
+    expect(() => core.missions.followUp(m.id, 'Encore')).toThrow(/Budget/)
+    expect(core.missions.get(m.id).status).toBe('done')
+    expect(() => core.missions.retry(m.id)).toThrow(/Budget/)
+    expect(core.missions.get(m.id).status).toBe('done')
+  })
+
+  it('deleting a mission expires its pending start approval', async () => {
+    const core = setup('codex', async (req) => ok(req))
+    const m = core.missions.create({ title: 'À supprimer', description: '', agentId: core.agent.id, priority: 'normal', startNow: false })
+    core.missions.start(m.id, 'automation')
+    expect(core.missions.approvals('pending').some((a) => a.missionId === m.id)).toBe(true)
+    core.missions.delete(m.id)
+    expect(core.missions.approvals('pending').some((a) => a.missionId === m.id)).toBe(false)
+  })
+
   it('an engine mission starts without the « may I start » approval, even when supervised', async () => {
     const core = setup('codex', async (req) => ok(req))
     const m = core.missions.create({ title: 'Direct', description: '', agentId: core.agent.id, priority: 'normal', startNow: true })

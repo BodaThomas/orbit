@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Scheduler, type AutomationInput } from '../src/main/core/automations/scheduler'
+import { DEFAULT_LIMITS } from '../src/main/core/constellations/engine'
 import { fakeAdapter, makeCore, novaInput, waitFor } from './helpers'
 
 function setup() {
@@ -118,6 +119,70 @@ describe('automatisations — scheduler', () => {
     await new Promise((r) => setTimeout(r, 300))
     expect(s.scheduler.runs(selfLoop.id).length).toBeLessThanOrEqual(1)
     s.scheduler.stop()
+  })
+
+  it('refuse une récurrence qui ne se produit jamais, ou une date unique déjà passée', () => {
+    const s = setup()
+    expect(() => s.scheduler.create(s.input({ recurrence: { kind: 'cron', expr: '0 0 30 2 *' } }))).toThrow('ne se produit jamais')
+    expect(() => s.scheduler.create(s.input({ recurrence: { kind: 'once', at: '2026-11-13T09:00' } }))).toThrow('déjà passée')
+    const a = s.scheduler.create(s.input())
+    expect(() => s.scheduler.update(a.id, s.input({ recurrence: { kind: 'once', at: '2026-01-01T09:00' } }))).toThrow('déjà passée')
+    expect(s.scheduler.list()).toHaveLength(1)
+  })
+
+  it('confirmation d’une exécution manquée : refusée si l’automatisation a été mise en pause, expirée après 24 h', async () => {
+    const s = setup()
+    const a = s.scheduler.create(s.input({ missedPolicy: 'ask' }))
+    s.setNow(Date.parse('2026-11-17T10:00:00Z'))
+    s.scheduler.recoverOnLaunch()
+    const run = s.scheduler.runs(a.id)[0]!
+    expect(run.status).toBe('pending_confirmation')
+    s.scheduler.setStatus(a.id, 'paused')
+    expect(() => s.scheduler.confirmRun(run.id, true)).toThrow('pause')
+    expect(s.scheduler.runs(a.id).find((r) => r.id === run.id)).toMatchObject({ status: 'skipped', missionId: null })
+
+    const b = s.scheduler.create(s.input({ name: 'Autre', missedPolicy: 'ask' }))
+    s.setNow(Date.parse('2026-11-19T10:00:00Z'))
+    s.scheduler.recoverOnLaunch()
+    const old = s.scheduler.runs(b.id)[0]!
+    expect(old.status).toBe('pending_confirmation')
+    const age = s.core.handle.sqlite.prepare('UPDATE automation_runs SET created_at = ? WHERE id = ?')
+    age.run('2026-11-19T09:00:00.000Z', old.id)
+    await s.scheduler.tick()
+    expect(s.scheduler.runs(b.id).find((r) => r.id === old.id)!.status).toBe('pending_confirmation') // 1 h: still open
+    age.run('2026-11-18T09:00:00.000Z', old.id)
+    await s.scheduler.tick()
+    expect(s.scheduler.runs(b.id).find((r) => r.id === old.id)).toMatchObject({ status: 'skipped', missionId: null })
+  })
+
+  const veille = (s: ReturnType<typeof setup>) => s.core.constellations.create({ name: 'Veille', description: '', objective: '', coordinatorAgentId: s.reader.id, members: [{ agentId: s.reader.id, role: '', responsibilities: '', canDelegate: true }], workspace: null, workspaceMode: 'shared', permissions: s.reader.permissions, limits: DEFAULT_LIMITS, isTemplate: false })
+
+  it('une constellation bloquée, en échec ou en pause (reprenable) ne clôt pas l’exécution ; la durée maximale la borne', async () => {
+    const s = setup()
+    const a = s.scheduler.create(s.input({ targetKind: 'constellation', targetId: veille(s).id, maxDurationMin: 30 }))
+    const run = s.scheduler.runNow(a.id)!
+    const crId = run.constellationRunId!
+    await waitFor(() => !s.core.constellations.isActive(crId) && s.core.constellations.run(crId).status === 'completed', 3000)
+    const setRun = (status: string) => s.core.handle.sqlite.prepare('UPDATE constellation_runs SET status = ? WHERE id = ?').run(status, crId)
+    const status = () => s.scheduler.runs(a.id).find((r) => r.id === run.id)!.status
+    for (const st of ['blocked', 'failed', 'paused']) {
+      setRun(st)
+      await s.scheduler.tick()
+      expect(status()).toBe('running')
+    }
+    s.setNow(Date.now() + 31 * 60_000)
+    await s.scheduler.tick()
+    expect(status()).toBe('failed')
+    expect(s.core.constellations.run(crId).status).toBe('cancelled')
+  })
+
+  it('une constellation terminée clôt l’exécution de l’automatisation', async () => {
+    const s = setup()
+    const a = s.scheduler.create(s.input({ targetKind: 'constellation', targetId: veille(s).id }))
+    const run = s.scheduler.runNow(a.id)!
+    await waitFor(() => !s.core.constellations.isActive(run.constellationRunId!) && s.core.constellations.run(run.constellationRunId!).status === 'completed', 3000)
+    await s.scheduler.tick()
+    expect(s.scheduler.runs(a.id).find((r) => r.id === run.id)!.status).toBe('done')
   })
 
   it('refuse une récurrence invalide ou sans déclencheur', () => {

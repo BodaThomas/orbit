@@ -645,6 +645,147 @@ describe('constellations — cycle de vie persistant', () => {
   })
 })
 
+describe('constellations — correctifs de fiabilité', () => {
+  it('plan hors limites puis limites relevées : la validation exigée par la politique reste exigée', async () => {
+    const t = team({ planApproval: 'always', limits: { maxSubtasks: 1 }, plan: [{ id: 'a', assignee: 'Milo', objective: 'lire', readOnly: true }, { id: 'b', assignee: 'Milo', objective: 'lire encore', readOnly: true }] })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    expect(t.core.constellations.run(run.id).status).toBe('blocked')
+    t.core.constellations.updateLimits(run.id, { maxSubtasks: 2 })
+    const d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('awaiting_approval')
+    expect(d.pendingPlan?.approvalReason).toContain('chaque plan')
+    expect(d.tasks).toHaveLength(0)
+  })
+
+  it('modifier une sous-mission échouée : la modification est appliquée et la relance utilise le nouvel objectif', async () => {
+    const t = team({ plan: [{ id: 'ko', assignee: 'Atlas', objective: 'fragile' }], member: (req) => (req.prompt.includes('fragile') ? Promise.reject(new Error('panne')) : { text: result('ok') }) })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    expect(t.core.constellations.detail(run.id).tasks[0]!.status).toBe('failed')
+    // Already attempted by Atlas: its companion can no longer change.
+    expect(() => t.core.constellations.editPlan(run.id, [{ id: 'ko', assignee: 'Milo', objective: 'robuste' }])).toThrow('déjà été tentée')
+    const v = t.core.constellations.editPlan(run.id, [{ id: 'ko', assignee: 'Atlas', objective: 'robuste' }])
+    t.core.constellations.approvePlan(run.id, v.id, v.hash)
+    await t.done(run.id)
+    let d = t.core.constellations.detail(run.id)
+    expect(d.tasks[0]!.spec.objective).toBe('robuste')
+    t.core.constellations.retryTasks(run.id, [d.tasks[0]!.missionId])
+    await t.done(run.id)
+    d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('completed')
+    expect(t.codex.log.at(-1)!.prompt).toContain('robuste')
+  })
+
+  it('un identifiant déjà terminé ne peut pas désigner un nouveau travail : correction demandée, identifiants listés', async () => {
+    const t = team({
+      limits: { maxDepth: 2 },
+      plan: (n) => (n === 0 ? plan([{ id: 'a', assignee: 'Milo', objective: 'tour 1', readOnly: true }]) : n === 1 ? plan([{ id: 'a', assignee: 'Milo', objective: 'autre travail', readOnly: true }]) : n === 2 ? plan([{ id: 'b', assignee: 'Milo', objective: 'tour 2', readOnly: true }]) : FINAL),
+    })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    const d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('completed')
+    expect(d.tasks.map((x) => [x.spec.key, x.spec.objective, x.status])).toEqual([['a', 'tour 1', 'done'], ['b', 'tour 2', 'done']])
+    expect(t.claude.log.some((l) => l.prompt.includes('Résultats des sous-missions') && l.prompt.includes('Identifiants déjà utilisés dans cette exécution : a'))).toBe(true)
+    expect(t.claude.log.some((l) => l.prompt.includes('a refusé ton plan') && l.prompt.includes('nouvel identifiant'))).toBe(true)
+    // Re-sending the finished task unchanged stays allowed.
+    const agents = [{ id: 'n', name: 'Nova', enabled: true }, { id: 'm', name: 'Milo', enabled: true }]
+    const definition = { coordinatorAgentId: 'n', members: [{ agentId: 'n', role: '', responsibilities: '', canDelegate: true }, { agentId: 'm', role: '', responsibilities: '', canDelegate: false }], limits: { maxSubtasks: 8 } }
+    const existing = [{ key: 'a', agentId: 'm', status: 'done', spec: { objective: 'x', expected: '', context: '', dependsOn: [], readOnly: true } }]
+    expect(validatePlan(plan([{ id: 'a', assignee: 'Milo', objective: 'x', readOnly: true }]), { definition, agents, existing, coordinatorCanDelegate: true }).errors).toEqual([])
+  })
+
+  it('« poursuivre sans elles » ignore aussi une sous-mission interrompue (et ses dépendantes)', async () => {
+    const t = team({ plan: [{ id: 'long', assignee: 'Atlas', objective: 'long' }, { id: 'apres', assignee: 'Milo', objective: 'après', dependsOn: ['long'], readOnly: true }], member: (req) => ({ text: result('ok'), delayMs: req.prompt.includes('## Ton objectif\nlong') ? 3000 : 0 }) })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await waitFor(() => t.codex.log.length === 1, 3000)
+    t.core.constellations.cancelAll()
+    t.core.missions.cancelAll()
+    await waitFor(() => !t.core.constellations.detail(run.id).tasks.some((x) => t.core.missions.isRunning(x.missionId)), 3000)
+    const reopened = new ConstellationEngine(t.core.db, t.core.bus, t.core.journal, t.core.agents, t.core.missions, t.core.providers, join(tmpdir(), 'orbit-wt-reopen'))
+    t.core.missions.recoverInterrupted()
+    reopened.recoverInterrupted()
+    reopened.resume(run.id, { skipFailed: true })
+    await waitFor(() => !reopened.isActive(run.id) && reopened.run(run.id).status === 'completed', 4000)
+    expect(reopened.detail(run.id).tasks.map((x) => x.status)).toEqual(['cancelled', 'cancelled'])
+    expect(t.claude.log.some((l) => l.prompt.includes('## Ton objectif\naprès'))).toBe(false)
+  })
+
+  it('une relance ne peut viser qu’une sous-mission du plan en cours', async () => {
+    let tries = 0
+    const t = team({
+      plan: (n) => (n === 0 ? plan([{ id: 'a', assignee: 'Milo', objective: 'fragile', readOnly: true }]) : n === 1 ? plan([{ id: 'b', assignee: 'Milo', objective: 'tour 2', readOnly: true }]) : FINAL),
+      member: (req) => ((req.prompt.includes('fragile') && tries++ === 0) || req.prompt.includes('tour 2') ? Promise.reject(new Error('panne')) : { text: result('ok') }),
+    })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    const a = t.core.constellations.detail(run.id).tasks[0]!
+    t.core.constellations.resume(run.id, { skipFailed: true })
+    await t.done(run.id)
+    const d = t.core.constellations.detail(run.id)
+    expect(d.run.status).toBe('blocked')
+    expect(d.tasks.map((x) => x.spec.key)).toEqual(['a', 'b'])
+    // « a » belongs to round 1; the plan being executed is round 2's.
+    expect(d.retryable.map((x) => x.key)).toEqual(['b'])
+    expect(() => t.core.constellations.retryTasks(run.id, [a.missionId])).toThrow('plan en cours')
+  })
+
+  it('la limite de durée ne réécrit jamais l’état d’une exécution annulée ou terminée', async () => {
+    const t = team({ plan: [{ id: 'a', assignee: 'Milo', objective: 'lire', readOnly: true }] })
+    const timeLimit = (e: ConstellationEngine, id: string) => (e as unknown as { timeLimit(id: string): void }).timeLimit(id)
+    const done = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(done.id)
+    timeLimit(t.core.constellations, done.id)
+    expect(t.core.constellations.run(done.id).status).toBe('completed')
+    const cancelled = t.core.constellations.launch(t.def.id, 'y')
+    t.core.constellations.cancel(cancelled.id)
+    await t.done(cancelled.id)
+    timeLimit(t.core.constellations, cancelled.id)
+    expect(t.core.constellations.run(cancelled.id).status).toBe('cancelled')
+    expect(t.core.constellations.events(cancelled.id).some((e) => e.kind === 'limit.duration')).toBe(false)
+  })
+
+  it('une sous-mission en attente d’approbation après un redémarrage est attendue puis exploitée', async () => {
+    const t = team({ plan: [{ id: 'dev', assignee: 'Atlas', objective: 'écrire' }] })
+    const sql = t.core.handle.sqlite
+    const pending = () => sql.prepare("SELECT id FROM approval_requests WHERE status = 'pending' AND kind = 'mission_start'").all() as { id: string }[]
+    const approveAll = () => {
+      for (const a of pending()) t.core.missions.resolveApproval(a.id, true)
+    }
+    // Automation origin + supervised companions with write permissions: every start needs approval.
+    const run = t.core.constellations.launch(t.def.id, 'x', { origin: 'automation' })
+    await waitFor(() => {
+      if (!t.core.constellations.detail(run.id).tasks.length) approveAll() // the coordinator only
+      return t.core.constellations.detail(run.id).tasks[0]?.status === 'approval_required'
+    }, 4000)
+    // Quit while it waits, reopen.
+    t.core.constellations.cancelAll()
+    const reopened = new ConstellationEngine(t.core.db, t.core.bus, t.core.journal, t.core.agents, t.core.missions, t.core.providers, join(tmpdir(), 'orbit-wt-reopen'))
+    reopened.recoverInterrupted()
+    reopened.resume(run.id)
+    await new Promise((r) => setTimeout(r, 100))
+    expect(reopened.run(run.id).status).toBe('running') // not « blocked: cannot start »
+    await waitFor(() => {
+      approveAll()
+      return !reopened.isActive(run.id) && reopened.run(run.id).status === 'completed'
+    }, 8000)
+    const d = reopened.detail(run.id)
+    expect(d.tasks[0]!.structured).toMatchObject({ summary: 'fait par codex' })
+    expect(d.events.some((e) => e.kind === 'task.done')).toBe(true)
+    expect(t.codex.log).toHaveLength(1)
+  }, 15_000)
+
+  it('budget : réservation appliquée même sans coût mesuré (coordinateur sur abonnement)', async () => {
+    const t = team({ plan: [], limits: { maxSubtasks: 1, maxBudgetUsd: 1 } })
+    const run = t.core.constellations.launch(t.def.id, 'x')
+    await t.done(run.id)
+    const overBudget = (n: number) => (t.core.constellations as unknown as { overBudget(id: string, n: number): { over: boolean } }).overBudget(run.id, n)
+    expect(overBudget(1).over).toBe(false)
+    expect(overBudget(2).over).toBe(true)
+  })
+})
+
 describe('constellations — worktrees Git (réel)', () => {
   it('écrivains parallèles isolés, conflit détecté, fusion refusée si dossier sale, puis fusion contrôlée', async () => {
     const { execFileSync } = await import('node:child_process')

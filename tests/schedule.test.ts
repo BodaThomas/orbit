@@ -41,4 +41,12 @@ describe('récurrences — fuseaux horaires et heure d’été', () => {
     expect(validateRecurrence({ kind: 'interval', minutes: 1, anchor: new Date().toISOString() }, PARIS)).toBeTruthy()
     expect(describeRecurrence({ kind: 'weekly', days: [1, 2, 3, 4, 5], time: '08:30' })).toBe('Chaque jour de semaine à 08:30')
   })
+  it('validation avec « maintenant » : une récurrence qui ne se produit plus est refusée', () => {
+    const now = Date.parse('2026-11-14T00:00:00Z')
+    expect(validateRecurrence({ kind: 'cron', expr: '0 0 30 2 *' }, PARIS, now)).toContain('ne se produit jamais')
+    expect(validateRecurrence({ kind: 'cron', expr: '0 0 30 2 *' }, PARIS)).toBeNull() // shape only
+    expect(validateRecurrence({ kind: 'once', at: '2026-01-01T00:00' }, PARIS, now)).toContain('déjà passée')
+    expect(validateRecurrence({ kind: 'once', at: '2026-12-24T18:00' }, PARIS, now)).toBeNull()
+    expect(validateRecurrence({ kind: 'cron', expr: '0 12 29 2 *' }, 'UTC', now)).toBeNull()
+  })
 })

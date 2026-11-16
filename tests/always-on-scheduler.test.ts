@@ -91,7 +91,16 @@ describe('planificateur autonome sur le runtime', () => {
     await desk.remote.transferAutomation(a.id, m.id)
     const back = await desk.remote.transferAutomation(a.id, 'local')
     expect(back.schedulerOwner).toBe('local')
+    // The runtime reports « paused » when it releases: the Mac copy must stay as the user left it.
+    await new Promise((r) => setTimeout(r, 400))
+    expect(desk.core.scheduler.get(a.id).status).toBe('active')
     expect(host.core.scheduler.get(a.id).schedulerOwner).toBe('released')
+    // Same transfer again, with no edit in between: really executed, never answered from the cache.
+    const again = await desk.remote.transferAutomation(a.id, m.id)
+    expect(again).toMatchObject({ schedulerOwner: m.id, ownerState: 'active' })
+    expect(host.core.scheduler.get(a.id).schedulerOwner).not.toBe('released')
+    expect((await desk.remote.transferAutomation(a.id, 'local')).schedulerOwner).toBe('local')
+    await waitFor(() => host.core.scheduler.get(a.id).schedulerOwner === 'released', 3000)
     rt.t = mac.t = Date.parse('2026-11-16T07:00:10Z')
     await host.core.scheduler.tick()
     expect(host.core.scheduler.runs(a.id)).toHaveLength(0)

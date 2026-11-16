@@ -278,7 +278,7 @@ type Handler = (params: Record<string, unknown>, server: FakeCodex) => unknown
 class FakeCodex implements RpcTransport {
   sent: { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: unknown }[] = []
   private lineCb: (l: string) => void = () => {}
-  private exitCb: (r: string) => void = () => {}
+  private exitCbs: ((r: string) => void)[] = []
   private serverReqId = 1000
   private replies = new Map<number, (v: unknown) => void>()
   closed = false
@@ -306,7 +306,7 @@ class FakeCodex implements RpcTransport {
     this.lineCb = cb
   }
   onExit(cb: (r: string) => void) {
-    this.exitCb = cb
+    this.exitCbs.push(cb)
   }
   close() {
     this.closed = true
@@ -325,7 +325,7 @@ class FakeCodex implements RpcTransport {
     })
   }
   crash(reason: string) {
-    this.exitCb(reason)
+    for (const cb of this.exitCbs) cb(reason)
   }
   methods() {
     return this.sent.filter((m) => m.method).map((m) => m.method)
@@ -468,6 +468,12 @@ describe('Codex app-server adapter', () => {
     const r2 = await crash.engine.run(request(ws), recorder().io)
     expect(r2.status).toBe('failed')
     expect(r2.error?.message).toMatch(/Codex s’est arrêté/)
+
+    // Crash after `turn/start` answered: the turn must settle instead of hanging the mission.
+    const late = codexWith((_p, s) => void queueMicrotask(() => s.crash('signal SIGKILL')))
+    const r3 = await late.engine.run(request(ws), recorder().io)
+    expect(r3.status).toBe('failed')
+    expect(r3.error?.message).toMatch(/Codex s’est arrêté/)
   })
 
   it('refuses to start without read permission', async () => {
