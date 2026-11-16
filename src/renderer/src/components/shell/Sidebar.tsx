@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Activity, BarChart3, CalendarClock, ChevronRight, FlaskConical, Globe2, LayoutGrid, Plus, Rocket, Search, Server, Settings, Sparkles, Users, Waypoints } from 'lucide-react'
+import { Activity, BarChart3, CalendarClock, ChevronRight, FlaskConical, LayoutGrid, Plus, Rocket, Search, Server, Settings, Sparkles, Waypoints } from 'lucide-react'
 import type { ProviderInfo } from '@shared/types'
 import { Kbd } from '@/components/ui/field'
 import { Popover, PopoverContent, PopoverTrigger, Tooltip } from '@/components/ui/overlay'
@@ -18,30 +18,65 @@ import { useUi } from '@/stores/ui'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
-const NAV = [
-  { path: '/', label: 'Vue d’ensemble', icon: LayoutGrid, key: '1' },
-  { path: '/universe', label: 'Mon univers', icon: Globe2, key: '2' },
-  { path: '/companions', label: 'Compagnons', icon: Users, key: '3' },
-  { path: '/missions', label: 'Missions', icon: Rocket, key: '4' },
-  { path: '/constellations', label: 'Constellations', icon: Waypoints },
-  { path: '/automations', label: 'Automatisations', icon: CalendarClock },
-  { path: '/activity', label: 'Activité', icon: Activity, key: '5' },
-  { path: '/analytics', label: 'Statistiques', icon: BarChart3, key: '6' },
-  { path: '/machines', label: 'Machines', icon: Server },
+/** Daily work first; the team sits in the middle; system pages stay at the bottom. */
+const WORK_NAV = [
+  { path: '/', label: 'Accueil', icon: LayoutGrid, key: '1' },
+  { path: '/missions', label: 'Missions', icon: Rocket, key: '2' },
+  { path: '/constellations', label: 'Constellations', icon: Waypoints, key: '3' },
+  { path: '/automations', label: 'Automatisations', icon: CalendarClock, key: '4' },
+] as const
+const SYSTEM_NAV = [
+  { path: '/activity', label: 'Activité', icon: Activity, key: '6' },
+  { path: '/analytics', label: 'Statistiques', icon: BarChart3, key: '7' },
+  { path: '/machines', label: 'Machines', icon: Server, key: '8' },
   { path: '/settings', label: 'Paramètres', icon: Settings, key: ',' },
 ] as const
 
 function isActive(path: string, current: string) {
-  if (path === '/') return current === '/'
+  // The universe is the home page shown as a map.
+  if (path === '/') return current === '/' || current === '/universe'
   return current === path || current.startsWith(`${path}/`)
 }
 
-function SectionTitle({ children, action }: { children: React.ReactNode; action?: React.ReactNode }) {
+function SectionTitle({ children, action, onClick, active }: { children: React.ReactNode; action?: React.ReactNode; onClick?: () => void; active?: boolean }) {
   return (
     <div className="flex h-7 items-center justify-between px-2.5">
-      <span className="text-[12.5px] font-medium text-fg-3">{children}</span>
+      {onClick ? (
+        <button onClick={onClick} aria-current={active ? 'page' : undefined} className={cn('rounded-[5px] text-[12.5px] font-medium outline-none hover:text-fg focus-visible:text-fg', active ? 'text-fg' : 'text-fg-3')}>
+          {children}
+        </button>
+      ) : (
+        <span className="text-[12.5px] font-medium text-fg-3">{children}</span>
+      )}
       {action}
     </div>
+  )
+}
+
+type NavEntry = { path: string; label: string; icon: typeof LayoutGrid; key: string }
+
+function NavItem({ item, active, badge = 0, compact }: { item: NavEntry; active: boolean; badge?: number; compact?: boolean }) {
+  const Icon = item.icon
+  return (
+    <button
+      onClick={() => navigate(item.path)}
+      aria-current={active ? 'page' : undefined}
+      className={cn(
+        'group flex w-full items-center gap-2.5 rounded-[8px] px-2.5 transition-colors outline-none focus-visible:bg-white/[0.05]',
+        compact ? 'h-[27px] text-[13px]' : 'h-[30px] text-[13.5px] [@media(max-height:760px)]:h-[26px]',
+        active ? 'bg-white/[0.06] text-fg' : 'text-fg-2 hover:bg-white/[0.03] hover:text-fg',
+      )}
+    >
+      <Icon className={cn('size-[15px]', active ? 'text-accent' : 'text-fg-3 group-hover:text-fg-2')} strokeWidth={1.8} />
+      {item.label}
+      {badge > 0 ? (
+        <span className="ml-auto rounded-[5px] bg-warning/15 px-1.5 text-[11px] leading-[18px] text-warning tabular" aria-label={`${badge} à traiter`}>
+          {badge}
+        </span>
+      ) : (
+        <span className="ml-auto text-2xs text-fg-4 opacity-0 group-hover:opacity-100">⌘{item.key}</span>
+      )}
+    </button>
   )
 }
 
@@ -266,34 +301,15 @@ export function Sidebar() {
 
       <DemoPill />
       <nav className="shrink-0 space-y-px px-3" aria-label="Navigation principale">
-        {NAV.map((item) => {
-          const active = isActive(item.path, path) && !(item.path === '/companions' && activeAgentId && path.startsWith('/chat'))
-          const Icon = item.icon
-          return (
-            <button
-              key={item.path}
-              onClick={() => navigate(item.path)}
-              aria-current={active ? 'page' : undefined}
-              className={cn(
-                'group flex h-[30px] w-full items-center gap-2.5 rounded-[8px] px-2.5 text-[13.5px] transition-colors outline-none focus-visible:bg-white/[0.05] [@media(max-height:760px)]:h-[26px]',
-                active ? 'bg-white/[0.06] text-fg' : 'text-fg-2 hover:bg-white/[0.03] hover:text-fg',
-              )}
-            >
-              <Icon className={cn('size-[15px]', active ? 'text-accent' : 'text-fg-3 group-hover:text-fg-2')} strokeWidth={1.8} />
-              {item.label}
-              {item.path === '/' && inboxCount > 0 && (
-                <span className="ml-auto rounded-[5px] bg-warning/15 px-1.5 text-[11px] leading-[18px] text-warning tabular group-hover:hidden" aria-label={`${inboxCount} à traiter`}>
-                  {inboxCount}
-                </span>
-              )}
-              {'key' in item && <span className="ml-auto text-2xs text-fg-4 opacity-0 group-hover:opacity-100">⌘{item.key}</span>}
-            </button>
-          )
-        })}
+        {WORK_NAV.map((item) => (
+          <NavItem key={item.path} item={item} active={isActive(item.path, path)} badge={item.path === '/' ? inboxCount : 0} />
+        ))}
       </nav>
 
       <div className="mt-3 flex min-h-[160px] flex-1 flex-col px-3">
         <SectionTitle
+          onClick={() => navigate('/companions')}
+          active={path === '/companions'}
           action={
             <button onClick={() => navigate('/companions/new')} className="flex size-5 items-center justify-center rounded-[5px] text-fg-3 hover:bg-white/5 hover:text-fg" aria-label="Ajouter un compagnon">
               <Plus className="size-3.5" />
@@ -330,6 +346,11 @@ export function Sidebar() {
         </div>
       </div>
 
+      <nav className="shrink-0 space-y-px border-t border-line px-3 py-2" aria-label="Système">
+        {SYSTEM_NAV.map((item) => (
+          <NavItem key={item.path} item={item} active={isActive(item.path, path)} compact />
+        ))}
+      </nav>
       <div className="shrink-0 border-t border-line">
         <ProvidersSection />
       </div>

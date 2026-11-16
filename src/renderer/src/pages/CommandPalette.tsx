@@ -62,12 +62,12 @@ export function CommandPalette() {
               <Command.Group heading="Aller à" className={group}>
                 {(
                   [
-                    ['/', 'Vue d’ensemble', LayoutGrid],
+                    ['/', 'Accueil', LayoutGrid],
                     ['/universe', 'Mon univers', Globe2],
-                    ['/companions', 'Compagnons', Users],
                     ['/missions', 'Missions', Rocket],
                     ['/constellations', 'Constellations', Waypoints],
                     ['/automations', 'Automatisations', CalendarClock],
+                    ['/companions', 'Compagnons', Users],
                     ['/activity', 'Activité', Activity],
                     ['/analytics', 'Statistiques', BarChart3],
                     ['/machines', 'Machines', Server],
