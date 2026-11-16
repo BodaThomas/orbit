@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - One **À traiter** (to do) list gathers everything waiting for you: approvals, plans to validate, blocked or failed team missions, automation runs to confirm and failed missions from the last two weeks. Failures can be marked as handled, and the sidebar shows the count next to the overview.
+- Constellations: questions from the coordinator are answered in place. Each question shows its choices as buttons (or yes and no for closed questions asked before choices existed), an optional precision field and an **À votre jugement** (your call) option, and one button sends every decision at once. Drafts survive leaving the page. Coordinators are asked to send questions with short options.
 - Constellations: sub-missions can declare write scopes (`writes`). Writers with separate scopes in a shared folder now run in parallel instead of one after the other, and each one can only write inside its own scopes.
 
 ### Changed

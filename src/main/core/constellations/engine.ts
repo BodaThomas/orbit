@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm'
 import { TERMINAL_MISSION_STATUSES } from '@shared/mission-states'
 import { ACTIVE_RUN_STATUSES, normalizeRunStatus, TERMINAL_RUN_STATUSES } from '@shared/constellation-states'
+import { normalizeQuestion } from '@shared/plan-questions'
 import type {
   Agent,
   AgentPermissions,
@@ -333,7 +334,7 @@ export class ConstellationEngine {
         status: r.status as ConstellationPlan['status'],
         hash: r.hash,
         tasks: r.tasks,
-        questions: r.questions,
+        questions: r.questions.map(normalizeQuestion),
         note: r.note,
         errors: r.errors,
         source: r.source as ConstellationPlan['source'],
