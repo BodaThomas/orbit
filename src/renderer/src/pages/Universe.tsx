@@ -49,7 +49,7 @@ const NEAR = starField(26, 500)
 
 const LEGEND: { status: AgentStatus[]; label: string }[] = [
   { status: ['working'], label: 'En mission' },
-  { status: ['awaiting_approval'], label: 'En attente' },
+  { status: ['awaiting_approval'], label: 'Attend votre accord' },
   { status: ['available', 'done'], label: 'Disponible' },
   { status: ['error'], label: 'Erreur' },
 ]
