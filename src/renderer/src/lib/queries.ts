@@ -18,16 +18,17 @@ const SCOPE_KEYS: Record<Exclude<InvalidateScope, 'all'>, string[]> = {
   providers: ['providers'],
   health: ['health'],
   conversations: ['conversations', 'messages', 'search'],
-  missions: ['missions', 'mission', 'agents', 'files'],
-  approvals: ['approvals', 'agents'],
+  missions: ['missions', 'mission', 'agents', 'files', 'inbox'],
+  approvals: ['approvals', 'agents', 'inbox'],
   activity: ['activity'],
   usage: ['usage'],
   notifications: ['notifications'],
+  inbox: ['inbox'],
   memory: ['memory'],
   settings: ['bootstrap', 'security', 'audit'],
   workflows: ['workflows'],
-  constellations: ['constellations', 'constellation-run', 'missions'],
-  automations: ['automations'],
+  constellations: ['constellations', 'constellation-run', 'missions', 'inbox'],
+  automations: ['automations', 'inbox'],
   machines: ['machines', 'runtime'],
   security: ['security', 'grants', 'auto-log', 'audit'],
 }
@@ -133,6 +134,7 @@ export const useUsage = () => useOrbitQuery(['usage'], 'usage.summary')
 export const useLocalClaude = () => useOrbitQuery(['usage', 'localClaude'], 'usage.localClaude')
 export const useQuotas = () => useOrbitQuery(['usage', 'quotas'], 'usage.quotas')
 export const useNotifications = () => useOrbitQuery(['notifications'], 'notifications.list')
+export const useInbox = () => useOrbitQuery(['inbox'], 'inbox.list')
 export const useMemory = (agentId: string | undefined) => useOrbitQuery(['memory', agentId], 'memory.list', { agentId: agentId ?? '' }, Boolean(agentId))
 export const useMachines = () => useOrbitQuery(['machines'], 'machines.list')
 export const useWorkflows = () => useOrbitQuery(['workflows'], 'workflows.list')

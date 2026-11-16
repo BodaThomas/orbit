@@ -14,6 +14,7 @@ import type {
   Message,
   Mission,
   MissionDetail,
+  InboxItem,
   OrbitNotification,
   OrbitSettings,
   ToolCall,
@@ -226,6 +227,8 @@ export const ipcSchemas = {
   'usage.quotas': z.void(),
   'usage.localClaude': z.void(),
   'usage.setLocalClaude': z.object({ enabled: z.boolean() }),
+  'inbox.list': z.void(),
+  'inbox.dismiss': z.object({ keys: z.array(z.string().min(1).max(200)).min(1).max(200) }),
   'notifications.list': z.void(),
   'notifications.markRead': z.object({ id: id.optional() }),
 
@@ -353,6 +356,8 @@ export interface IpcOutputs {
   'usage.quotas': RateLimitSnapshot[]
   'usage.localClaude': { enabled: boolean; usage: ClaudeLocalUsage | null; error: string | null }
   'usage.setLocalClaude': { enabled: boolean; usage: ClaudeLocalUsage | null; error: string | null }
+  'inbox.list': InboxItem[]
+  'inbox.dismiss': void
   'notifications.list': OrbitNotification[]
   'notifications.markRead': void
 
@@ -460,6 +465,7 @@ export type InvalidateScope =
   | 'activity'
   | 'usage'
   | 'notifications'
+  | 'inbox'
   | 'memory'
   | 'settings'
   | 'workflows'
