@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Activity, Brain, CalendarClock, Waypoints, Folder, Gauge, MessageCircle, MoreHorizontal, Pencil, Plus, Rocket, ShieldCheck, Trash2, Wallet, Wrench } from 'lucide-react'
 import { PALETTES, PERMISSION_LABELS, STATUS_LABELS } from '@shared/catalog'
 import { ACTIVE_MISSION_STATUSES } from '@shared/mission-states'
-import { ENGINE_INFO, EFFORT_LEVELS } from '@shared/engines'
+import { ENGINE_INFO, EFFORT_LEVELS, engineBilling } from '@shared/engines'
 import { effectivePermissions } from '@shared/permissions-matrix'
 import { AUTONOMY_LABELS } from '@shared/permission-labels'
 import { missionCounts } from '@shared/stats'
@@ -315,6 +315,8 @@ function Stats({ agent }: { agent: Agent }) {
 
 function Config({ agent }: { agent: Agent }) {
   const machines = useRemoteMachines()
+  const providers = useProviders()
+  const engineProvider = providers.data?.find((p) => p.id === agent.providerId)
   const automations = useAutomations()
   const engine = ENGINE_INFO[agent.providerId]
   const machine = agent.runtime === 'remote' ? machines.data?.find((m) => m.id === agent.machineId) : null
@@ -323,7 +325,7 @@ function Config({ agent }: { agent: Agent }) {
   const rows: [string, React.ReactNode][] = [
     ['Moteur', engine.label],
     ['Mode de connexion', engine.connection],
-    ['Facturation', engine.billing],
+    ['Facturation', engineProvider ? engineBilling(engineProvider).label : engine.billing],
     ['Modèle', agent.model === 'default' ? 'Modèle par défaut du moteur' : agent.model],
     ['Effort de raisonnement', agent.effort ? (EFFORT_LEVELS.find((e) => e.id === agent.effort)?.label ?? agent.effort) : 'Par défaut'],
     ['Autonomie', AUTONOMY_LABELS[agent.autonomy]],

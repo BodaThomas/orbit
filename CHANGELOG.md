@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- The engine picker in the companion wizard says what each engine is charged to: your Claude or ChatGPT subscription when the CLI is signed in with one, otherwise your API credits. Engines are grouped into agents and chat-only engines, each with a one-line description, and the Claude Agent SDK is folded under **Autres moteurs** (other engines) once Claude Code is ready, since it does the same work on API credits only. The companion profile shows the detected billing too.
 - Forms are shorter. The companion wizard has four steps (appearance and planet are one step), the constellation wizard five (name and goal are one step), and rarely changed options such as reasoning effort, strict isolation, automation limits and constellation limits are folded under **Options avancées** (advanced options). The execution location only appears once a machine is connected.
 - The companion profile groups configuration and permissions under one **Réglages** (settings) tab. Approval buttons say what they cover (**Pendant cette mission**, **Toujours, dans ce dossier**) and plan validation options are explained in the form.
 - Onboarding has a back button until the first companion is created.
@@ -23,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Companions: the wizard explains what is missing before creation, requires a working folder for agent engines and asks before discarding unsaved edits. In edit mode, **Enregistrer** (save) is the main action on every step.
 - Automations: the form says which field blocks saving instead of only disabling the button.
 - Disabled buttons on the constellations page explain why in a tooltip.
+- Providers are shown with their own logo (Anthropic, Claude, OpenAI, Codex, Gemini, Grok, OpenRouter, Ollama) instead of a letter monogram.
 - Mission filters and the list/board choice are kept when you leave the page and come back.
 - The sidebar is grouped by use: daily work (**Accueil** (home), Missions, Constellations, Automations), then your companions, then system pages (Activity, Statistics, Machines, Settings). The overview and **Mon univers** (my universe) are now two views of the home page, and keyboard shortcuts ⌘1 to ⌘8 follow the sidebar order.
 - The interface uses one word per concept: **moteur** (engine) instead of provider or intelligence, **accord** (consent) for every approval, **dossier de travail** (working folder), **budget** for spending limits, **machine** for remote servers and **coordinateur** for the constellation lead. A constellation run is called a **mission collective** (team mission) everywhere, and stopping one now says **Arrêter** (stop) instead of « Annuler ».

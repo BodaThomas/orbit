@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { describe, expect, it } from 'vitest'
+import { engineBilling } from '@shared/engines'
 import { estimateCost } from '@shared/pricing'
-import type { AgentPermissions } from '@shared/types'
+import type { AgentPermissions, ProviderId, ProviderInfo } from '@shared/types'
 import { allowedClaudeTools, createClaudeAgentEngine } from '../src/main/core/engine/claude-agent'
 import { codexSandbox, createCodexEngine, unwrapShell } from '../src/main/core/engine/codex'
 import type { RpcTransport } from '../src/main/core/engine/codex-rpc'
@@ -503,5 +504,26 @@ describe('cost attribution', () => {
     expect(estimateCost('anthropic', 'claude-haiku-5-5', 100_000, 1_000_000).costUsd).toBeCloseTo(0.01 + 0.5)
     expect(estimateCost('anthropic', 'claude-haiku-5-5', 200_000, 1_000_000).costUsd).toBeCloseTo(0.1 + 2.5)
     expect(estimateCost('codex', 'gpt-x', 1000, 1000)).toMatchObject({ costUsd: null, costKind: 'unknown' })
+  })
+})
+
+describe('engine billing label', () => {
+  const info = (id: ProviderId, engineAuth: ProviderInfo['engineAuth'], engineFacts: ProviderInfo['engineFacts'] = null) => ({ id, engineAuth, engineFacts })
+
+  it('follows the detected sign-in for CLI engines', () => {
+    expect(engineBilling(info('claude-code', 'subscription', { Abonnement: 'max' }))).toEqual({ kind: 'subscription', label: 'Sur votre abonnement Claude Max' })
+    expect(engineBilling(info('claude-code', 'api_key'))).toEqual({ kind: 'api', label: 'Sur vos crédits API Anthropic' })
+    expect(engineBilling(info('codex', 'subscription')).label).toBe('Sur votre abonnement ChatGPT')
+  })
+
+  it('does not guess before the sign-in was checked', () => {
+    expect(engineBilling(info('claude-code', null)).kind).toBe('unknown')
+    expect(engineBilling(info('codex', 'unknown')).kind).toBe('unknown')
+  })
+
+  it('always charges API credits for the SDK and chat engines', () => {
+    expect(engineBilling(info('claude-agent', 'subscription')).kind).toBe('api')
+    expect(engineBilling(info('anthropic', null)).kind).toBe('api')
+    expect(engineBilling(info('openai', null)).label).toBe('Sur vos crédits API OpenAI')
   })
 })
