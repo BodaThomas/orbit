@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, FolderOpen, Laptop, Lock, Rocket, Server, ShieldCheck, Sparkles, Wand2, Zap } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowLeft, ArrowRight, Check, CreditCard, FolderOpen, Laptop, Lock, Rocket, Server, ShieldCheck, Sparkles, Ticket, Wand2, Zap } from 'lucide-react'
 import { COMPANION_PRESETS, DEFAULT_PERMISSIONS, EXPRESSIONS, PALETTE_IDS, PALETTES, PERMISSION_LABELS, SPECIES, TEXTURES } from '@shared/catalog'
 import { AUTONOMY_EXPLAINED } from '@shared/permission-labels'
-import { EFFORT_LEVELS, isAgentEngine } from '@shared/engines'
+import { EFFORT_LEVELS, ENGINE_INFO, engineBilling, isAgentEngine } from '@shared/engines'
 import type { AgentInput } from '@shared/ipc'
-import type { AgentPermissions, Appearance, AutonomyLevel, PaletteId, ProviderInfo } from '@shared/types'
+import type { AgentPermissions, Appearance, AutonomyLevel, PaletteId, ProviderId, ProviderInfo } from '@shared/types'
 import { Page, PageLoading } from '@/components/shell/Page'
 import { Button } from '@/components/ui/button'
 import { AdvancedSection, Badge, Input, Label, Switch, Textarea } from '@/components/ui/field'
@@ -169,6 +169,19 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
   const setLook = (patch: Partial<Appearance>) => setDraft((d) => ({ ...d, appearance: { ...d.appearance, ...patch } }))
   const setPlanet = (patch: Partial<Appearance['planet']>) => setDraft((d) => ({ ...d, appearance: { ...d.appearance, planet: { ...d.appearance.planet, ...patch } } }))
   const provider: ProviderInfo | undefined = providers.data?.find((p) => p.id === draft.providerId)
+  const engineGroups = useMemo(() => groupEngines(providers.data ?? []), [providers.data])
+
+  // Billing on a CLI engine is only known once its sign-in was checked, so check it
+  // quietly on the engine step instead of showing « selon votre connexion » forever.
+  const checked = useRef(new Set<ProviderId>())
+  useEffect(() => {
+    if (step !== 2) return
+    for (const p of providers.data ?? []) {
+      if (!SIGN_IN_ENGINES.includes(p.id) || p.lastValidatedAt || checked.current.has(p.id)) continue
+      checked.current.add(p.id)
+      void call('providers.validate', { providerId: p.id }).catch(() => undefined)
+    }
+  }, [step, providers.data])
   const canNext = step !== 0 || draft.name.trim().length > 0
   const last = step === STEPS.length - 1
   const confirm = useConfirm()
@@ -347,37 +360,36 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
             <div className="space-y-5">
               <div>
                 <Label>Moteur</Label>
-                <div className="grid grid-cols-2 gap-2">
-                  {providers.data?.map((p) => {
-                    const disabled = p.availability !== 'available'
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        disabled={disabled}
-                        onClick={() => setDraft((d) => ({ ...d, providerId: p.id, model: p.models[0]?.id ?? d.model }))}
-                        className={cn(
-                          'flex items-center gap-3 rounded-[11px] p-3 text-left transition-[background,box-shadow] disabled:opacity-45',
-                          draft.providerId === p.id ? 'bg-accent/[0.09] shadow-[inset_0_0_0_1.5px_rgb(165_155_250/0.6)]' : 'bg-white/[0.025] shadow-[inset_0_0_0_1px_var(--color-line)] enabled:hover:bg-white/[0.05]',
-                        )}
-                      >
-                        <ProviderMark id={p.id} size={26} />
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-[13px] font-medium text-fg">{p.name}</span>
-                          <span className="block truncate text-2xs text-fg-3">{disabled ? 'Bientôt' : p.id === 'demo' ? 'Hors ligne, réponses fictives' : p.capabilities.kind === 'agent' ? 'Moteur agent · fichiers, commandes, sessions' : p.connected ? 'Connecté' : 'Clé API requise'}</span>
-                        </span>
-                        {!disabled && p.id !== 'demo' && <Badge tone={p.connected ? 'success' : 'warning'}>{p.connected ? 'Prêt' : 'À connecter'}</Badge>}
-                      </button>
-                    )
-                  })}
+                <div className="space-y-4">
+                  {engineGroups.main.map((g) => (
+                    <div key={g.title}>
+                      <div className="mb-2 text-2xs text-fg-3">
+                        <span className="font-medium text-fg-2">{g.title}</span> · {g.hint}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {g.items.map((p) => (
+                          <EngineCard key={p.id} provider={p} selected={draft.providerId === p.id} onSelect={() => setDraft((d) => ({ ...d, providerId: p.id, model: p.models[0]?.id ?? d.model }))} />
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                  {engineGroups.more.length > 0 && (
+                    <AdvancedSection label="Autres moteurs" defaultOpen={engineGroups.more.some((p) => p.id === draft.providerId)}>
+                      <div className="grid grid-cols-2 gap-2">
+                        {engineGroups.more.map((p) => (
+                          <EngineCard key={p.id} provider={p} selected={draft.providerId === p.id} onSelect={() => setDraft((d) => ({ ...d, providerId: p.id, model: p.models[0]?.id ?? d.model }))} />
+                        ))}
+                      </div>
+                    </AdvancedSection>
+                  )}
                 </div>
                 {provider?.capabilities.kind === 'agent' && (
-                  <p className="mt-2 text-xs leading-relaxed text-fg-3">
+                  <p className="mt-3 text-xs leading-relaxed text-fg-3">
                     {provider.name} travaille dans un dossier que vous choisirez à l’étape suivante, au fil de missions que vous suivez en direct. {provider.statusDetail}
                   </p>
                 )}
                 {provider && !provider.connected && provider.id !== 'demo' && provider.availability === 'available' && provider.capabilities.kind !== 'agent' && (
-                  <p className="mt-2 text-xs text-fg-3">
+                  <p className="mt-3 text-xs text-fg-3">
                     Vous pourrez connecter {provider.name} dans{' '}
                     <button className="text-accent hover:underline" onClick={() => navigate('/settings/providers')}>
                       Paramètres → Moteurs
@@ -614,5 +626,58 @@ export function CompanionWizardPage({ agentId }: { agentId?: string }) {
         <Preview draft={draft} />
       </div>
     </Page>
+  )
+}
+
+const SIGN_IN_ENGINES: ProviderId[] = ['claude-code', 'codex']
+
+/**
+ * Agents first, then chat-only engines. The Agent SDK does what Claude Code does but
+ * always on API credits, so it is folded away once Claude Code is ready, together with
+ * the engines that are not available yet.
+ */
+function groupEngines(list: ProviderInfo[]) {
+  const claudeCodeReady = list.some((p) => p.id === 'claude-code' && p.connected)
+  const folded = (p: ProviderInfo) => p.availability !== 'available' || (p.id === 'claude-agent' && claudeCodeReady)
+  const shown = list.filter((p) => !folded(p))
+  return {
+    main: [
+      { title: 'Agents', hint: 'travaillent dans un dossier : fichiers, commandes', items: shown.filter((p) => p.capabilities.kind === 'agent') },
+      { title: 'Conversation', hint: 'répondent dans le chat, sans accès aux fichiers', items: shown.filter((p) => p.capabilities.kind !== 'agent') },
+    ].filter((g) => g.items.length),
+    more: list.filter(folded),
+  }
+}
+
+function EngineCard({ provider: p, selected, onSelect }: { provider: ProviderInfo; selected: boolean; onSelect: () => void }) {
+  const disabled = p.availability !== 'available'
+  const billing = engineBilling(p)
+  const BillingIcon = billing.kind === 'subscription' ? Ticket : CreditCard
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onSelect}
+      aria-pressed={selected}
+      className={cn(
+        'flex items-start gap-3 rounded-[11px] p-3 text-left transition-[background,box-shadow] disabled:opacity-45',
+        selected ? 'bg-accent/[0.09] shadow-[inset_0_0_0_1.5px_rgb(165_155_250/0.6)]' : 'bg-white/[0.025] shadow-[inset_0_0_0_1px_var(--color-line)] enabled:hover:bg-white/[0.05]',
+      )}
+    >
+      <ProviderMark id={p.id} size={26} />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-start gap-2">
+          <span className="min-w-0 flex-1 text-[13px] leading-snug font-medium text-fg">{p.name}</span>
+          {!disabled && p.id !== 'demo' && <Badge tone={p.connected ? 'success' : 'warning'}>{p.connected ? 'Prêt' : 'À connecter'}</Badge>}
+        </span>
+        <span className="block text-2xs leading-snug text-fg-3">{ENGINE_INFO[p.id].summary}</span>
+        {!disabled && (
+          <span className={cn('mt-1 flex items-start gap-1 text-2xs leading-snug', billing.kind === 'subscription' ? 'text-success' : billing.kind === 'api' ? 'text-fg-2' : 'text-fg-3')}>
+            {billing.kind !== 'free' && <BillingIcon className="mt-px size-3 shrink-0" />}
+            <span>{billing.label}</span>
+          </span>
+        )}
+      </span>
+    </button>
   )
 }
